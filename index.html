@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a101c">
+  <meta name="description" content="BursaQuant: transparent market research, conditional trade setups and position-risk planning.">
+  <title>BursaQuant | Research Terminal</title>
+  <link rel="stylesheet" href="./src/styles.css">
+  <script src="./src/bundle.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><div class="brand-mark">B<span>Q</span></div><div><strong>BursaQuant</strong><small>RESEARCH TERMINAL</small></div></div>
+      <div class="side-heading">WORKSPACE</div>
+      <nav class="side-nav" aria-label="Main navigation">
+        <button class="nav-item active" data-page="analysis"><span class="nav-ico">◫</span> Stock Analysis</button>
+        <button class="nav-item" data-page="screener"><span class="nav-ico">▤</span> Stock Screener</button>
+        <button class="nav-item" data-page="watchlist"><span class="nav-ico">☆</span> Watchlist <span class="counter" id="watchCount">0</span></button>
+        <button class="nav-item" data-page="journal"><span class="nav-ico">▧</span> Trading Journal</button>
+        <button class="nav-item" data-page="settings"><span class="nav-ico">⚙</span> Risk & Data Settings</button>
+      </nav>
+      <div class="side-bottom">
+        <div class="micro-label">DATA MODE</div>
+        <div class="side-source"><span id="sourceDot" class="status-dot simulated"></span><span id="sourceLabel">SIMULATED DEMO</span></div>
+        <p>Research only. No broker connection or trade execution.</p>
+        <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer" class="credit">Independent charts • No TradingView library used</a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="top-left"><button class="menu-btn" id="menuBtn" aria-label="Toggle menu">☰</button><span class="breadcrumb">WORKSPACE <b>/</b> <span id="crumb">STOCK ANALYSIS</span></span></div>
+        <div class="top-right"><span class="badge badge-outline" id="marketBadge">DEMO DATA</span><span class="top-time" id="clock"></span></div>
+      </header>
+
+      <section id="page-analysis" class="page active">
+        <div class="heading-row"><div><div class="eyebrow">MARKET INTELLIGENCE</div><h1>Stock Analysis</h1><p>Explore the chart. Understand the logic. Plan the risk.</p></div><div class="heading-actions"><button id="saveAnalysis" class="btn ghost">↓ Save analysis</button><button id="watchBtn" class="btn secondary">☆ Watchlist</button></div></div>
+        <div class="search-row"><div class="search-wrapper"><span class="search-icon">⌕</span><input id="tickerInput" autocomplete="off" placeholder="Search company name or ticker, e.g. Apple, Maybank, NVDA..." aria-label="Search ticker or company"/><div id="searchResults" class="search-results hidden"></div></div><button id="loadTicker" class="btn primary">Analyse →</button><label class="btn ghost file-control" title="Import actual OHLCV data from your own CSV"><input type="file" id="csvInput" accept=".csv,text/csv" hidden>↑ Import CSV</label></div>
+        <div class="data-notice" id="dataNotice"><span class="notice-led"></span><span id="dataNoticeText">SIMULATED SAMPLE · Generated candles; not historical quotes or current market prices.</span><span id="dataTimestamp" class="muted"></span></div>
+        <div class="instrument-bar"><div><div class="instrument-title"><h2 id="symbolTitle">AAPL</h2><span class="exchange-pill" id="exchangeTag">NASDAQ · STOCK</span></div><div class="instrument-name" id="companyName">Apple Inc.</div></div><div class="last-price"><strong id="currentPrice">—</strong><span id="priceChange" class="chg">—</span></div></div>
+        <div class="chart-card card">
+          <div class="chart-toolbar"><div class="group"><span class="toolbar-caption">TIMEFRAME</span><div id="timeframeGroup" class="seg-control"><button data-tf="1h">1H</button><button data-tf="4h" class="selected">4H</button><button data-tf="1day">1D</button><button data-tf="1week">1W</button></div></div><div class="group"><span class="toolbar-caption">STRATEGY</span><select id="modeSelect" aria-label="Trading strategy"><option value="swing">Short Swing · 1–5 Days</option><option value="intraday">Intraday</option><option value="medium">Medium Swing</option><option value="invest">Long-Term Research</option></select></div></div>
+          <div class="chart-legend"><span><i class="dot ma20"></i>SMA 20</span><span><i class="dot ma50"></i>SMA 50</span><span><i class="dot support"></i>Support</span><span><i class="dot resistance"></i>Resistance</span><span><i class="dot buy"></i>Buy-lower zone</span></div>
+          <div class="canvas-wrap"><canvas id="priceCanvas" aria-label="Illustrative OHLC candlestick chart with moving averages and levels"></canvas><div id="chartTooltip" class="chart-tooltip hidden"></div></div>
+          <div class="chart-footer"><span id="chartLength">— candles</span><span>Hover for candle details • Mouse wheel to zoom</span></div>
+        </div>
+        <div id="metricCards" class="metrics-grid"></div>
+        <div class="section-title"><div><div class="eyebrow">CONDITIONAL TRADE PLANNING</div><h3>Suggested Trading Scenarios</h3></div><span class="muted small">Not an instruction to trade</span></div>
+        <div id="planCards" class="plan-grid"></div>
+        <div class="two-col">
+          <div class="card score-card"><div class="card-title-row"><h3>Explainable Setup Score</h3><span class="badge badge-outline">Rules-based</span></div><div class="score-head"><div class="score-ring" id="scoreRing"><div><strong id="scoreNumber">—</strong><small>/ 100</small></div></div><div class="score-summary"><div id="scoreLabel" class="large-strong">—</div><p id="scoreExplanation">—</p></div></div><div id="scoreFactors" class="score-factors"></div><p class="disclaimer" id="coverageNotice">Fundamental statements and news sentiment are not inferred from prices.</p></div>
+          <div class="card"><div class="card-title-row"><h3>Indicator Breakdown</h3><span class="badge badge-outline" id="indicatorTF">4H</span></div><div id="indicatorTable" class="indicator-table"></div><div class="subheading">Key Price Levels</div><div id="levelTable" class="indicator-table"></div></div>
+        </div>
+        <div class="two-col"><div class="card"><h3>Market Scenarios</h3><div id="scenarioDetails" class="scenario-details"></div></div><div class="card"><h3>Fundamental & Sentiment Coverage</h3><div class="coverage-grid"><div><span class="muted">Financial statements</span><strong>Not connected</strong></div><div><span class="muted">News sentiment</span><strong>Not connected</strong></div><div><span class="muted">Broader-market indices</span><strong>Not connected</strong></div><div><span class="muted">Price/volume signal</span><strong id="technicalMood">Available</strong></div></div><p class="disclaimer">This MVP computes technical evidence only. It does not invent financial ratios, news, institutional flows or sentiment feeds. Future data adapters can add them.</p></div></div>
+      </section>
+
+      <section id="page-screener" class="page"><div class="heading-row"><div><div class="eyebrow">UNIVERSE RESEARCH</div><h1>Stock Screener</h1><p>Compare technical conditions across the demo universe and any actively imported symbol.</p></div></div><div class="data-notice"><span class="notice-led"></span>Demo results are simulated. This is not yet a full-market scan.</div><div class="card"><div class="filters"><label>Market<select id="screenMarket"><option value="all">All markets</option><option value="US">US</option><option value="MY">Bursa Malaysia</option></select></label><label>Minimum score<input id="screenMin" type="number" min="0" max="100" value="0"/></label><label>Setup<select id="screenSetup"><option value="all">All conditions</option><option value="bullish">Bullish trend</option><option value="lower">Buy-lower available</option></select></label><button id="runScreen" class="btn primary">Run screen →</button></div><div class="scroll-table"><table><thead><tr><th>Instrument</th><th>Market</th><th class="right">Last</th><th class="right">Score</th><th>Trend</th><th class="right">Support</th><th class="right">Resistance</th><th></th></tr></thead><tbody id="screenResults"></tbody></table></div></div></section>
+
+      <section id="page-watchlist" class="page"><div class="heading-row"><div><div class="eyebrow">MY RESEARCH</div><h1>Watchlist & Saved Analysis</h1><p>Saved locally on this browser. Export backups before clearing browser data.</p></div><button id="exportSaved" class="btn secondary">↓ Export backup</button></div><div class="card"><h3>Watchlist</h3><div id="watchItems" class="watch-items"></div></div><div class="card space-top"><h3>Saved Research Snapshots</h3><div id="savedItems" class="watch-items"></div></div></section>
+
+      <section id="page-journal" class="page"><div class="heading-row"><div><div class="eyebrow">EXECUTION REVIEW</div><h1>Trading Journal</h1><p>Record decisions and calculate closed-trade profit or loss. Never shares data with a broker.</p></div><button id="exportJournal" class="btn secondary">↓ Export CSV</button></div><div id="journalStats" class="metrics-grid journal-stats"></div><div class="card"><h3>Record a Closed Trade</h3><form id="journalForm" class="journal-form"><label>Symbol<input name="symbol" required maxlength="24" placeholder="AAPL / 1155"/></label><label>Currency<select name="currency"><option>MYR</option><option>USD</option></select></label><label>Entry Price<input name="entry" type="number" step="any" min="0.000001" required/></label><label>Exit Price<input name="exit" type="number" step="any" min="0" required/></label><label>Quantity<input name="quantity" type="number" step="1" min="1" required/></label><label>Total Fees<input name="fees" type="number" step="any" min="0" value="0"/></label><label class="wide">Note<input name="notes" maxlength="250" placeholder="Setup, reasons, mistakes, lessons learned..."/></label><button type="submit" class="btn primary">+ Add trade</button></form></div><div class="card space-top"><h3>Trade History</h3><div class="scroll-table"><table><thead><tr><th>Date</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th><th>Notes</th><th></th></tr></thead><tbody id="tradeRows"></tbody></table></div></div></section>
+
+      <section id="page-settings" class="page"><div class="heading-row"><div><div class="eyebrow">PORTFOLIO GUARDRAILS</div><h1>Risk & Data Settings</h1><p>Configure your reference capital and maximum acceptable planned loss.</p></div></div><div class="two-col"><div class="card"><h3>Risk Configuration</h3><form id="settingsForm" class="settings-form"><label>Reference Capital (MYR)<input type="number" id="setCapital" min="1" step="100" required/></label><label>Maximum Risk per Trade (%)<input type="number" id="setRisk" min="0.1" max="10" step="0.1" required/></label><label>Maximum Capital Allocation per Trade (%)<input type="number" id="setAllocation" min="1" max="100" step="1" required/></label><label>Bursa Brokerage Fee per Side (%)<input type="number" id="setFee" min="0" max="5" step="0.01" required/></label><label>Bursa Minimum Fee per Side (MYR)<input type="number" id="setMinFee" min="0" step="0.01" required/></label><label>US Brokerage Fee per Side (%)<input type="number" id="setFeeUS" min="0" max="5" step="0.01" required/></label><label>US Minimum Fee per Side (USD)<input type="number" id="setMinFeeUS" min="0" step="0.01" required/></label><label>Estimated Slippage per Side (%)<input type="number" id="setSlippage" min="0" max="10" step="0.05" required/></label><label>USD/MYR Conversion Assumption (manual)<input type="number" id="setFx" min="0.01" step="0.01" required/></label><div class="info-line">US positions are budgeted by converting MYR reference capital using the manually configured FX assumption. Fees are approximate and exclude taxes, levies and FX transaction charges.</div><button type="submit" class="btn primary">Save Risk Settings</button></form></div><div class="card"><h3>Market Data</h3><p class="muted">No API key is required for simulated demonstration data or manually imported CSV data.</p><form id="apiForm" class="settings-form"><label>Personal Twelve Data API Key<input type="password" id="apiKey" autocomplete="off" placeholder="Enter in this browser only"/></label><div class="info-line">Key is held in this browser tab's session storage, not committed to GitHub. Fetching occurs directly from your browser. Data availability, free-tier access, CORS and market coverage depend on the provider.</div><div class="row-buttons"><button type="submit" class="btn primary">Use key this session</button><button type="button" id="clearKey" class="btn ghost">Clear key</button></div></form><hr><h3>CSV Format</h3><code class="csv-example">datetime,open,high,low,close,volume<br>2026-01-01,10.5,10.7,10.4,10.6,100000</code><p class="muted small">CSV is processed locally, never uploaded. Set the chart's timeframe to match the CSV candle interval. CSV data does not automatically generate missing intraday bars.</p><p class="disclaimer">Open-source education tool. No brokerage execution. No price feed is guaranteed. Warrants need derivative-specific pricing logic and are not scored by the ordinary equity model.</p></div></div></section>
+      <footer>BURSAQUANT v0.1 • Educational scenario engine • Quotes and calculations can be incomplete, delayed, or inaccurate. Verify any trade independently.</footer>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body></html>
