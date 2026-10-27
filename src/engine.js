@@ -1,5 +1,35 @@
 /** BursaQuant educational analysis engine. No data fetching, no broker orders. */
 export const DEFAULT_SETTINGS={capital:20000,riskPct:1,allocationPct:25,feePct:0.1,minFee:8,feePctUS:0,minFeeUS:0,slippagePct:0.15,usdMyr:4.30};
+export const RATING_INDICATORS=[
+  {id:'trend',name:'Moving-average trend',description:'Moving averages smooth closing prices so the direction is easier to see.',how:'SMA20 averages the last 20 closes; SMA50 and SMA200 use 50 and 200. This rule checks price above SMA20, SMA20 above SMA50, and price above SMA200 when available.',limitation:'Averages lag price and can change direction repeatedly in a range. Missing SMA200 is excluded from this rule.'},
+  {id:'rsi',name:'RSI momentum',description:'RSI14 compares recent upward and downward price changes on a scale from 0 to 100.',how:'The rating gives its highest reading inside your preferred RSI band, a lower reading above that band, and less credit below it. The band is your preference, not a universal entry signal.',limitation:'A high RSI can persist in a strong trend. A low RSI does not establish that a reversal is coming.'},
+  {id:'macd',name:'MACD momentum',description:'MACD compares faster and slower exponential moving averages to describe momentum.',how:'The MACD line is EMA12 minus EMA26. Its signal line is a 9-period EMA. A positive histogram means MACD is above its signal; this checklist awards full credit when positive.',limitation:'This checks the latest histogram, not whether a crossover just occurred. MACD lags and can whipsaw.'},
+  {id:'structure',name:'Support / resistance',description:'Support and resistance are estimated areas where price previously paused or turned.',how:'The engine looks for local swing lows and highs. This pullback-oriented rule favours price in the lower half of the estimated support/resistance range.',limitation:'These are estimates, not guaranteed barriers. The engine uses ATR-based fallback levels if no suitable swing is found.'},
+  {id:'volume',name:'Relative volume',description:'Relative volume compares activity in the latest candle with the preceding candles.',how:'RVOL divides the latest volume by the mean positive volume of the previous 20 candles. This rule scales credit with RVOL, reaching full credit at approximately 1.67 times.',limitation:'An unfinished candle has incomplete volume. Partial exchange feeds can differ from consolidated market volume; larger volume does not establish direction.'},
+  {id:'volatility',name:'ATR volatility',description:'ATR14 measures typical candle movement, including gaps from the previous close.',how:'ATR uses a smoothed average of true ranges. This rule prefers lower ATR relative to price: below 2.5% receives more credit than 2.5–5% or above 5%.',limitation:'Lower volatility is a preference, not evidence of higher returns. ATR does not predict price direction or guarantee a stop will fill.'},
+  {id:'bollinger',name:'Bollinger-band location',description:'Bollinger Bands place two standard-deviation bands around a 20-period moving average.',how:'This pullback-oriented rule gives full credit between the lower band and middle average, partial credit between the middle and upper band, and less credit outside the bands.',limitation:'A band touch does not confirm a reversal. Price can follow a band during a trend; flat bands are excluded as unavailable.'}
+];
+export const STRATEGY_PRESETS={
+  balanced:{id:'balanced',name:'Balanced technical',description:'A mixed checklist of trend, momentum, price structure, volume and volatility.',weights:{trend:30,rsi:15,macd:10,structure:20,volume:15,volatility:10,bollinger:0},rsiLow:45,rsiHigh:68,constructiveAt:72,cautionBelow:42},
+  trend:{id:'trend',name:'Trend emphasis',description:'Gives more weight to moving averages and momentum. This is an emphasis profile, not a backtested trading system.',weights:{trend:45,rsi:15,macd:20,structure:5,volume:10,volatility:5,bollinger:0},rsiLow:50,rsiHigh:70,constructiveAt:72,cautionBelow:42},
+  pullback:{id:'pullback',name:'Pullback emphasis',description:'Emphasises support proximity and band location. A reversal still needs separate confirmation.',weights:{trend:20,rsi:15,macd:5,structure:30,volume:5,volatility:10,bollinger:15},rsiLow:35,rsiHigh:55,constructiveAt:72,cautionBelow:42},
+  breakout:{id:'breakout',name:'Breakout emphasis',description:'Emphasises trend, momentum and volume. The score alone does not confirm a break above resistance.',weights:{trend:30,rsi:15,macd:20,structure:0,volume:25,volatility:10,bollinger:0},rsiLow:55,rsiHigh:75,constructiveAt:72,cautionBelow:42}
+};
+export function normalizeStrategy(input){
+  const base=STRATEGY_PRESETS.balanced;
+  const clone=s=>({...s,weights:{...s.weights}});
+  if(typeof input==='string')return clone(STRATEGY_PRESETS[input]||base);
+  if(!input||typeof input!=='object'||Array.isArray(input))return clone(base);
+  const reference=Object.hasOwn(STRATEGY_PRESETS,input.id)?STRATEGY_PRESETS[input.id]:base;
+  if(input.weights!==undefined&&(!input.weights||typeof input.weights!=='object'||Array.isArray(input.weights)))return clone(base);
+  const numeric=(value,fallback,min,max)=>typeof value==='number'&&Number.isFinite(value)?Math.min(max,Math.max(min,value)):fallback;
+  const weights=Object.fromEntries(RATING_INDICATORS.map(({id})=>[id,numeric(input.weights?.[id],reference.weights[id],0,100)]));
+  if(!Object.values(weights).some(w=>w>0))return clone(base);
+  const rsiLow=numeric(input.rsiLow,reference.rsiLow,0,99),rsiHigh=numeric(input.rsiHigh,reference.rsiHigh,1,100);
+  const constructiveAt=numeric(input.constructiveAt,reference.constructiveAt,1,100),cautionBelow=numeric(input.cautionBelow,reference.cautionBelow,0,99);
+  if(rsiLow>=rsiHigh||cautionBelow>=constructiveAt)return clone(base);
+  return {id:input.id==='custom'?'custom':reference.id,name:typeof input.name==='string'&&input.name.trim()?input.name.trim().slice(0,80):reference.name,description:typeof input.description==='string'?input.description.slice(0,500):reference.description,weights,rsiLow,rsiHigh,constructiveAt,cautionBelow};
+}
 export const mean=v=>v.length?v.reduce((a,b)=>a+b,0)/v.length:0;
 export const round=(v,d=3)=>Number.isFinite(v)?Number(v.toFixed(d)):null;
 const last=a=>a[a.length-1];
@@ -10,31 +40,41 @@ export function atrSeries(candles,period=14){const tr=candles.map((c,i)=>i===0?c
 export function macdSeries(closes){const fast=emaSeries(closes,12),slow=emaSeries(closes,26);const macd=closes.map((_,i)=>fast[i]===null||slow[i]===null?null:fast[i]-slow[i]);const valid=macd.filter(v=>v!==null);const signalValid=emaSeries(valid,9);const signal=Array(macd.length).fill(null);let j=0;for(let i=0;i<macd.length;i++)if(macd[i]!==null)signal[i]=signalValid[j++];return {macd,signal,hist:macd.map((v,i)=>v===null||signal[i]===null?null:v-signal[i])};}
 export function bollinger(closes,p=20,mult=2){if(closes.length<p)return null;const a=closes.slice(-p),mid=mean(a),sd=Math.sqrt(mean(a.map(x=>(x-mid)**2)));return {middle:mid,upper:mid+mult*sd,lower:mid-mult*sd};}
 function supportResistance(candles,price,atr){const n=candles.length;const pivotsLow=[],pivotsHigh=[];for(let i=Math.max(3,n-95);i<n-3;i++){const c=candles[i];if(c.low<=Math.min(...candles.slice(i-3,i+4).map(x=>x.low)))pivotsLow.push(c.low);if(c.high>=Math.max(...candles.slice(i-3,i+4).map(x=>x.high)))pivotsHigh.push(c.high)}const below=pivotsLow.filter(v=>v<price).sort((a,b)=>b-a),above=pivotsHigh.filter(v=>v>price).sort((a,b)=>a-b);const recent=candles.slice(-60);let support=below[0]??Math.min(...recent.map(x=>x.low));let resistance=above[0]??Math.max(...recent.map(x=>x.high));if(support>=price)support=price-atr*1.3;if(resistance<=price)resistance=price+atr*1.3;return {support:Math.max(0.001,support),resistance};}
-export function analyse(candles,style='swing'){
+export function analyse(candles,style='swing',strategy){
   if(!Array.isArray(candles)||candles.length<55)throw new Error('At least 55 valid OHLC candles are needed for analysis. For SMA200, 200 candles are recommended.');
   const c=candles.slice().sort((a,b)=>a.time-b.time),closes=c.map(x=>x.close),volumes=c.map(x=>x.volume||0),px=last(closes);
   const sma20=smaSeries(closes,20),sma50=smaSeries(closes,50),sma200=smaSeries(closes,200),rsi=rsiSeries(closes),atr=atrSeries(c),macd=macdSeries(closes),bb=bollinger(closes);
   const vol20=mean(volumes.slice(-21,-1).filter(x=>x>0));const hasVolume=vol20>0&&last(volumes)>0;
   const rvol=hasVolume?last(volumes)/vol20:null;const a=last(atr)||px*.02;const levels=supportResistance(c,px,a);const trendUp=px>last(sma20)&&last(sma20)>last(sma50),trendDown=px<last(sma20)&&last(sma20)<last(sma50);
   const trend=trendUp?'Bullish':trendDown?'Bearish':'Mixed / Range';const r=last(rsi),hist=last(macd.hist);const recent=c.slice(-60),hi=Math.max(...recent.map(x=>x.high)),lo=Math.min(...recent.map(x=>x.low));
-  const factors=[
-    {key:'Trend',weight:30,score:(px>last(sma20)?12:0)+(last(sma20)>last(sma50)?12:0)+(last(sma200)!==null&&px>last(sma200)?6:last(sma200)===null?3:0),reason:'Price vs SMA20/50/200'},
-    {key:'Momentum',weight:25,score:(r>=45&&r<=68?15:r>68?9:r>=35?8:3)+(hist!==null&&hist>0?10:0),reason:'RSI range and MACD histogram'},
-    {key:'Price structure',weight:20,score:Math.max(0,Math.min(20,Math.round(20*(px-levels.support)/Math.max(levels.resistance-levels.support,a))<=10?17:11)),reason:'Distance within the support/resistance channel'},
-    {key:'Volume',weight:15,score:rvol===null?null:Math.min(15,Math.round(Math.max(0,rvol)*9)),reason:rvol===null?'No reliable volume':'Current volume / previous 20 bars'},
-    {key:'Volatility',weight:10,score:a/px<.025?9:a/px<.05?6:3,reason:'ATR as percentage of price'}
-  ];
-  const active=factors.filter(f=>f.score!==null);const totalWeight=active.reduce((s,f)=>s+f.weight,0);
-  const score=Math.round(100*active.reduce((s,f)=>s+f.score,0)/totalWeight);
-  const factorData=factors.map(f=>({...f,contribution:f.score===null?null:Math.round(f.score/f.weight*100)}));
+  const config=normalizeStrategy(strategy),hasLong=last(sma200)!==null;
+  const trendRatio=((px>last(sma20)?12:0)+(last(sma20)>last(sma50)?12:0)+(hasLong&&px>last(sma200)?6:0))/(hasLong?30:24);
+  const rangePosition=(px-levels.support)/Math.max(levels.resistance-levels.support,a),atrPct=a/px*100;
+  const bandRatio=!bb||bb.upper<=bb.lower?null:px>=bb.lower&&px<=bb.middle?1:px>bb.middle&&px<=bb.upper?.6:.2;
+  const values={
+    trend:{ratio:trendRatio,reason:`Price ${px.toFixed(4)}; SMA20 ${last(sma20).toFixed(4)}; SMA50 ${last(sma50).toFixed(4)}; SMA200 ${hasLong?last(sma200).toFixed(4):'unavailable and excluded'}.`},
+    rsi:{ratio:r===null?null:r>=config.rsiLow&&r<=config.rsiHigh?1:r>config.rsiHigh?.6:r>=Math.max(0,config.rsiLow-10)?8/15:.2,reason:`RSI14 ${r===null?'unavailable':r.toFixed(1)}; preferred band ${config.rsiLow}–${config.rsiHigh}.`},
+    macd:{ratio:hist===null?null:hist>0?1:0,reason:`MACD12/26/9 histogram ${hist===null?'unavailable':hist.toFixed(4)}; positive earns credit.`},
+    structure:{ratio:rangePosition<=.5?.85:.55,reason:`Price ${(rangePosition*100).toFixed(1)}% through the ATR-adjusted support/resistance range; lower-half preference.`},
+    volume:{ratio:rvol===null?null:Math.min(1,Math.max(0,rvol)*.6),reason:rvol===null?'Reliable positive volume unavailable; excluded from the rating.':`Latest volume / previous 20 positive-volume mean: ${rvol.toFixed(2)}×.`},
+    volatility:{ratio:atrPct<2.5?.9:atrPct<5?.6:.3,reason:`ATR14 ${a.toFixed(4)} / price: ${atrPct.toFixed(2)}%; lower-volatility preference.`},
+    bollinger:{ratio:bandRatio,reason:bandRatio===null?'Bollinger range unavailable or flat; excluded from the rating.':`Price ${px.toFixed(4)}; lower ${bb.lower.toFixed(4)}, middle ${bb.middle.toFixed(4)}, upper ${bb.upper.toFixed(4)}; pullback-location preference.`}
+  };
+  const factorData=RATING_INDICATORS.filter(x=>config.weights[x.id]>0).map(({id,name})=>{
+    const weight=config.weights[id],{ratio,reason}=values[id];
+    return {id,key:name,weight,score:ratio===null?null:round(weight*ratio,4),contribution:ratio===null?null:Math.round(ratio*100),reason};
+  });
+  const active=factorData.filter(f=>f.score!==null),totalWeight=active.reduce((s,f)=>s+f.weight,0);
+  const selectedWeight=factorData.reduce((s,f)=>s+f.weight,0);
+  const score=totalWeight>0?Math.round(100*active.reduce((s,f)=>s+f.score,0)/totalWeight):null;
   let adjustment=1;if(style==='intraday')adjustment=.65;if(style==='medium')adjustment=1.5;if(style==='invest')adjustment=2;
   const support=levels.support,resistance=levels.resistance;
   const pullEntry=support+0.20*a*adjustment;const pullStop=Math.max(.001,support-0.70*a*adjustment);const pullRisk=pullEntry-pullStop;
   const breakoutEntry=resistance+0.15*a*adjustment;const breakoutStop=Math.max(.001,resistance-0.8*a*adjustment);const breakoutRisk=breakoutEntry-breakoutStop;
   const lowPlan={id:'lower',label:'Buy Lower',tag:'SUPPORT PULLBACK',description:'Conditional entry if price revisits support, stabilizes, and confirms a reversal. Do not assume support must hold.',entry:pullEntry,zoneLow:support,zoneHigh:support+.30*a*adjustment,deepWatch:Math.max(0.001,support-.40*a*adjustment),stop:pullStop,tp1:Math.max(resistance,pullEntry+1.5*pullRisk),tp2:Math.max(resistance+a*adjustment,pullEntry+2.5*pullRisk),tp3:Math.max(resistance+a*adjustment+pullRisk,pullEntry+3.5*pullRisk),conditions:'Look for a bullish reversal near support. A break toward the deeper watch level invalidates this support entry; reassess rather than averaging down automatically.',valid:pullEntry>pullStop};
   const breakoutPlan={id:'breakout',label:'Buy Breakout',tag:'MOMENTUM CONFIRMATION',description:'Conditional entry only after price closes beyond resistance, with confirmation and meaningful volume.',entry:breakoutEntry,zoneLow:resistance,zoneHigh:breakoutEntry+.15*a*adjustment,stop:breakoutStop,tp1:breakoutEntry+1.5*breakoutRisk,tp2:breakoutEntry+2.5*breakoutRisk,tp3:breakoutEntry+3.5*breakoutRisk,conditions:'Require candle close above resistance, check volume expansion, avoid excessive gaps.',valid:breakoutEntry>breakoutStop};
-  const verdict=score>=72&&trendUp?'Constructive / Watch for Entry':score<42||trendDown?'Caution / No New Long':'Neutral / Wait for Confirmation';
-  return {candles:c,price:px,previous:c.at(-2)?.close??px,sma20,sma50,sma200,rsi:r,macd:hist,atr:a,bb,rvol,hasVolume,trend,score,factors:factorData,levels:{...levels,fib382:hi-(hi-lo)*.382,fib618:hi-(hi-lo)*.618},plans:[lowPlan,breakoutPlan],verdict,style,coverage:{sma200:last(sma200)!==null,volume:hasVolume,fundamentals:false,news:false,indices:false}};
+  const verdict=score===null?'Insufficient indicator data':score>=config.constructiveAt?'Constructive / Watch for Entry':score<config.cautionBelow?'Caution / No New Long':'Neutral / Wait for Confirmation';
+  return {candles:c,price:px,previous:c.at(-2)?.close??px,sma20,sma50,sma200,rsi:r,macd:hist,atr:a,bb,rvol,hasVolume,trend,score,factors:factorData,strategy:config,ratingCoverage:{availableWeight:totalWeight,selectedWeight},levels:{...levels,fib382:hi-(hi-lo)*.382,fib618:hi-(hi-lo)*.618},plans:[lowPlan,breakoutPlan],verdict,style,coverage:{sma200:last(sma200)!==null,volume:hasVolume,fundamentals:false,news:false,indices:false}};
 }
 /** Long-position pretrade model. Estimates two-sided commissions & price slippage. Does not model gaps/taxes/FX fees. */
 export function sizePosition(plan, settings=DEFAULT_SETTINGS, currency='MYR', lotSize=1){
