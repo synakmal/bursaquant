@@ -1,6 +1,12 @@
-# BursaQuant — Stock Research Terminal (v0.3)
+# BursaQuant — Stock Research Terminal (v0.4 trial)
 
 BursaQuant is a lightweight stock-research dashboard for US and Bursa Malaysia markets. It combines real OHLCV data with transparent technical rules, conditional entry/stop/TP scenarios and configurable position-risk calculations.
+
+## Start the latest-data trial
+
+Read [TRIAL-START-HERE.md](TRIAL-START-HERE.md) for the step-by-step local and GitHub/Vercel setup. `npm start` runs a personal server on http://127.0.0.1:8000 with the Yahoo trial adapter enabled. No dependency installation or provider API key is required for this local adapter. Yahoo is unofficial and request access is not unlimited or guaranteed; review its data-use terms. Hosted Yahoo requests require a private `BQ_ACCESS_TOKEN`, entered in the app's data settings.
+
+v0.4 adds on-demand company search and historical candle analysis through Yahoo, explicit provider/error states, source and retrieval timestamps, inference/caching disclosures, request-race protection and all nine timeframe choices. Provider errors never silently replace a real-data analysis with synthetic prices. The source directory remains connected to the selected GitHub repository through its review branch.
 
 > **Data safety:** Provider responses do not guarantee freshness, accuracy, completeness, display rights or executable prices. The app never places trades.
 
@@ -18,7 +24,7 @@ Open **Strategy & Learning** in the sidebar. No API registration is needed to tr
 
 Weights need not sum to 100. Score = 100 × available weighted points / available selected weight. Zero disables an indicator. Missing inputs are excluded from the denominator; if every selected input is unavailable the rating is unavailable. These are unvalidated preference profiles, not backtested systems or probabilities of profit. Disabling a rating input does not remove its chart overlay or change entry/stop/target geometry. Trading style and risk settings remain separate.
 
-Indicator periods remain SMA20/50/200, RSI14, MACD12/26/9, ATR14, Bollinger20/2 and previous-20-candle relative volume. Period editing and extra timeframes are future work. Current chart intervals remain 1H, 4H, daily and weekly. An AI model, provider credentials and automatic continuous price refresh are not connected by this update.
+Indicator periods remain SMA20/50/200, RSI14, MACD12/26/9, ATR14, Bollinger20/2 and previous-20-candle relative volume. Period editing remains future work. Yahoo trial chart intervals are 5m, 15m, 30m, 1H, session-based 4H, daily, weekly, monthly and quarterly, subject to symbol/history availability. Bursa 4H uses 30-minute inputs over approximately 59 days and produces shorter buckets at lunch/close; SMA200 may be unavailable. Quarterly bars combine complete monthly groups. The latest-candle completion is inferred conservatively using exchange times, provider timestamps and a disclosed after-close settlement rule; it is not guaranteed by Yahoo. The AI model and continuous automatic refresh remain unconnected; data requests are explicit and cached.
 
 The original v0.1 and v0.2 ZIP extracts are preserved in the workspace's `versions/` directory. This `bursaquant/` directory is the active source. Upload its contents to the repository root when publishing, not the surrounding workspace or archives. Keep personal journal exports and research briefs outside the repository.
 

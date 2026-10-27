@@ -94,9 +94,13 @@ export function generateDemo(symbol='AAPL',timeframe='4h',n=230){
   let seed=2166136261;const key=`${symbol}-${timeframe}`;for(const ch of key)seed=Math.imul(seed^ch.charCodeAt(0),16777619)>>>0;
   const rand=()=>{seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;return(seed>>>0)/4294967296};
   const bases={AAPL:184,NVDA:148,MSFT:411,TSLA:315,SPY:585,QQQ:505,'1155':10.2,'1023':7.6,'5347':13.5,'5183':5.6,'5296':1.72,'FBMKLCI':1640,'5357CC':0.14};
-  const base=bases[symbol]||45,intervals={'1h':3600,'4h':14400,'1day':86400,'1week':604800},interval=intervals[timeframe]||14400;
-  const now=Math.floor(Date.now()/1000/interval)*interval;let px=base*(.82+rand()*.1);const out=[];
-  for(let i=0;i<n;i++){const p=rand()-.5;const variation=(.012*(p*1.7)+.003*Math.sin(i/8)+.0008);const open=px;px=Math.max(.005,px*(1+variation));const high=Math.max(open,px)*(1+rand()*.007);const low=Math.min(open,px)*(1-rand()*.007);out.push({time:now-(n-i-1)*interval,open,high,low,close:px,volume:Math.floor(120000+rand()*2200000+Math.abs(variation)*30000000)})}
+  const base=bases[symbol]||45,intervals={'5min':300,'15min':900,'30min':1800,'1h':3600,'4h':14400,'1day':86400,'1week':604800},interval=intervals[timeframe]||14400;
+  let now=Math.floor(Date.now()/1000/interval)*interval;const date=new Date();
+  if(timeframe==='1week'){const day=(date.getUTCDay()+6)%7;now=Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate()-day)/1000;}
+  const monthStep=timeframe==='3month'?3:timeframe==='1month'?1:0,anchorMonth=monthStep===3?Math.floor(date.getUTCMonth()/3)*3:date.getUTCMonth();
+  const candleTime=offset=>monthStep?Date.UTC(date.getUTCFullYear(),anchorMonth-offset*monthStep,1)/1000:now-offset*interval;
+  let px=base*(.82+rand()*.1);const out=[];
+  for(let i=0;i<n;i++){const p=rand()-.5;const variation=(.012*(p*1.7)+.003*Math.sin(i/8)+.0008);const open=px;px=Math.max(.005,px*(1+variation));const high=Math.max(open,px)*(1+rand()*.007);const low=Math.min(open,px)*(1-rand()*.007);out.push({time:candleTime(n-i-1),open,high,low,close:px,volume:Math.floor(120000+rand()*2200000+Math.abs(variation)*30000000)})}
   return out;
 }
 export function exchangeEpoch(datetime,zone='UTC'){
