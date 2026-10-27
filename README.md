@@ -1,154 +1,168 @@
-# BursaQuant — Free Stock Research Terminal (MVP v0.1)
+# BursaQuant — Stock Research Terminal (v0.3)
 
-A lightweight **zero-install** stock-analysis dashboard for US and Bursa Malaysia research, using explainable technical rules, conditional entry/exit scenarios and configurable position-risk calculations.
+BursaQuant is a lightweight stock-research dashboard for US and Bursa Malaysia markets. It combines real OHLCV data with transparent technical rules, conditional entry/stop/TP scenarios and configurable position-risk calculations.
 
-> **Important:** The application opens in **SIMULATED DEMO** mode. Demo candles are synthetic, not current or historical market quotes. Never use demonstration levels to place real trades. To analyse actual bars, import a trusted CSV or supply your own Twelve Data API key for an optional direct browser request. Real feed access, accuracy, freshness, public display rights and Bursa/warrant coverage are NOT guaranteed.
+> **Data safety:** Provider responses do not guarantee freshness, accuracy, completeness, display rights or executable prices. The app never places trades.
 
-## Quick start (no npm, no Python required)
+## New in v0.3: your strategy, explained
 
-1. Extract the entire ZIP so that `index.html` and `src/` remain in the same folder.
-2. Open **`index.html`** using Chrome, Edge or Firefox.
-3. Search e.g. `Maybank`, `1155`, `Apple` or `AAPL` using the sample company catalogue.
-4. Select `1H`, `4H`, `1D` or `1W`, or choose the trading-style dropdown.
-5. Open **Risk & Data Settings** to adjust your reference capital, percentage risk, position allocation, estimated fees/slippage and manually assumed USD/MYR conversion.
-6. Explore **Buy Lower**, **Buy Breakout** and **Hold/Wait** setups. They are contingent scenarios derived from current loaded candles, NOT live broker buy calls or guaranteed trades.
-7. Try **Stock Screener**, **Watchlist** and **Trading Journal**. Watchlists and journal entries are saved in your local browser storage.
+Open **Strategy & Learning** in the sidebar. No API registration is needed to try these features with demo candles or imported CSV.
 
-This build uses plain JavaScript, CSS, HTML and an independent Canvas candlestick chart. **No npm dependency or web server is needed.** Internet access is needed only for optional live data or web fonts.
+- Start with Balanced, Trend, Pullback or Breakout emphasis; edit and save a custom name.
+- Enable individual rating inputs and set relative weights: moving-average trend, RSI, MACD, support/resistance, relative volume, ATR volatility and Bollinger-band location.
+- Adjust the preferred RSI band and the constructive/caution score thresholds.
+- Ratings, the demo screener, local answers and exported AI context use the saved rules. Research snapshots retain the strategy used when saved.
+- Read an expandable guide for each indicator, including its calculation, use in this app and limitations.
+- Ask the local explainer about the score, confirmation conditions, risk sizing or missing evidence.
+- Export an AI research brief containing the selected strategy, measured evidence, data source, coverage and risk settings. This creates a local file; it does not contact an AI service.
 
-## GitHub Pages (free static site)
+Weights need not sum to 100. Score = 100 × available weighted points / available selected weight. Zero disables an indicator. Missing inputs are excluded from the denominator; if every selected input is unavailable the rating is unavailable. These are unvalidated preference profiles, not backtested systems or probabilities of profit. Disabling a rating input does not remove its chart overlay or change entry/stop/target geometry. Trading style and risk settings remain separate.
 
-1. Create a new GitHub repository (for example `BursaQuant`).
-2. Upload **the extracted contents** of this folder to the repository root (`index.html` at the top level). Do not upload the ZIP as the website.
-3. In GitHub, open **Settings → Pages**.
-4. Under **Build and deployment**, choose **Deploy from a branch**, branch **main**, folder **/(root)**, and save.
-5. Open the GitHub Pages URL shown in Settings → Pages when deployment succeeds.
+Indicator periods remain SMA20/50/200, RSI14, MACD12/26/9, ATR14, Bollinger20/2 and previous-20-candle relative volume. Period editing and extra timeframes are future work. Current chart intervals remain 1H, 4H, daily and weekly. An AI model, provider credentials and automatic continuous price refresh are not connected by this update.
 
-Never commit API keys, private broker credentials, transaction histories or user-specific personal financial information to the public repo. The app has no broker-trading integration.
+The original v0.1 and v0.2 ZIP extracts are preserved in the workspace's `versions/` directory. This `bursaquant/` directory is the active source. Upload its contents to the repository root when publishing, not the surrounding workspace or archives. Keep personal journal exports and research briefs outside the repository.
 
-## Market data options
+## What changed in v0.2
 
-### 1) Demo data (default)
+- Added a **server-side market-data gateway** under `api/` for Vercel.
+- Added **Twelve Data** integration for US 1H, 4H, 1D and 1W candles.
+- Added **iSaham API** integration for Bursa Malaysia search and D/W historical candles, subject to chart entitlement and unverified freshness.
+- Added remote **company-name/ticker search** through the gateway.
+- Removed the need to put provider API keys into browser JavaScript.
+- Added gateway health checking and a clear real-data/demo fallback.
+- Preserved CSV import, technical calculations, support/resistance, Buy Lower/Breakout scenarios, TP1–TP3, invalidation, risk sizing, watchlists and journal.
 
-- Simulates valid OHLCV-shaped series from deterministic generated data.
-- Company name search works with a **small built-in catalogue**. Arbitrary tickers can be entered, but these will also use simulated prices unless actual data is loaded.
-- The on-screen banner always says **SIMULATED SAMPLE** when demo data is active.
-- The demo uses equally spaced bars, not real trading-session/calendar intervals. It is a UI and math demonstration, not a source of backtesting data.
-- The "screener" scans only the built-in *demonstration universe*, not the full US/Bursa market. A fully live universe scanner is a future feature requiring a source and licensing evaluation.
+## Architecture
 
-### 2) Local CSV import
+```text
+GitHub Pages frontend
+        |
+        | HTTPS JSON
+        v
+Vercel serverless gateway
+   |                 |
+   v                 v
+Twelve Data        iSaham API
+   |                 |
+ US prices         Bursa prices
+```
 
-Use the `Import CSV` button on the analysis page. Minimum 55 valid candles; 200+ recommended for SMA200.
+The provider credentials live only in Vercel environment variables. They are never committed to GitHub and are never sent to the browser.
 
-Required columns (case-insensitive):
+## Real-data coverage in the free phase
+
+### US
+
+The gateway requests US stock/ETF OHLCV data from Twelve Data. The current Twelve Data Basic plan lists real-time US equities/ETFs, technical indicators, reference data and 800 API requests/day; `/time_series` supports 1h, 4h, 1day and 1week intervals. Verify the provider's current terms and data-display permissions before public use.
+
+### Bursa Malaysia
+
+The gateway uses iSaham API for Bursa search and chart history. As checked on 27 October 2026, Free includes 500 credits/month for eligible endpoints, but the chart endpoint requires **Basic+** entitlement and documents D/W/M resolutions. The existing adapter requests daily and weekly history; it does not provide Bursa intraday candles. Stored quotes have no guaranteed update interval or provider delay. An API response timestamp is not proof of quote freshness. See [iSaham documentation](https://api.isaham.my/docs) and [pricing](https://api.isaham.my/pricing).
+
+For Bursa 1H/4H research, use the existing CSV importer until a provider with suitable intraday rights is selected.
+
+## Deploy the gateway
+
+Read `DEPLOY-GATEWAY.md` for the exact steps.
+
+Short version:
+
+1. Push this repository to GitHub.
+2. Import the repository into Vercel.
+3. Add these Vercel environment variables:
+   - `TWELVE_DATA_API_KEY`
+   - `ISAHAM_API_TOKEN`
+   - optional `BQ_ALLOWED_ORIGIN` set to your GitHub Pages origin, e.g. `https://YOURNAME.github.io`
+4. Redeploy.
+5. Check `https://YOUR-VERCEL-PROJECT.vercel.app/api/health`.
+6. In BursaQuant → **Risk & Data Settings → Market Data Gateway**, enter the Vercel API base ending in `/api`.
+7. Click **Save & test gateway**.
+
+You can keep the frontend on GitHub Pages. The frontend calls the Vercel gateway cross-origin.
+
+## GitHub Pages
+
+The frontend remains a static site. Upload the extracted repository contents so `index.html` is at the repository root. GitHub Pages can publish the static frontend; the Vercel project supplies the private serverless API layer.
+
+## Local/demo use
+
+If the gateway URL is blank, the site stays in **SIMULATED DEMO** mode. Demo candles are synthetic and must not be treated as market prices.
+
+You can also import trusted OHLCV CSV data locally.
+
+Minimum CSV columns:
 
 ```csv
 datetime,open,high,low,close,volume
 2026-01-01,10.50,10.70,10.40,10.60,100000
-2026-01-02,10.60,10.80,10.50,10.75,120000
 ```
 
-- `date` or `timestamp` may substitute for `datetime`; volume is optional.
-- Prices must already be adjusted/consistent as required by your research method.
-- **Timezone notice:** Datetimes with explicit timezone offsets are preferred. Datetimes without offsets are currently interpreted as UTC. Provider timestamps may instead be exchange-local; normalize them before importing. Dates alone are accepted.
-- A CSV's interval cannot be changed by switching the 1H/4H/1D selector. Provide a dataset that already matches the intended timeframe.
-- This data stays in your browser for the active page session; only the snapshot summaries are saved if you click Save Analysis.
+At least 55 valid candles are required; 200+ are recommended for SMA200.
 
-The included `sample_synthetic_4h.csv` contains **synthetic candles only** for testing the importer.
+## Technical analysis engine
 
-### 3) Personal Twelve Data API key (optional, direct from browser)
+- SMA 20, 50, 200
+- RSI14
+- MACD 12/26/9
+- ATR14
+- Bollinger Bands
+- Relative volume
+- Local swing support/resistance
+- Fibonacci 38.2% / 61.8%
+- Conditional Buy Lower and Buy Breakout scenarios
+- Invalidation / stop levels
+- TP1 / TP2 / TP3
+- Explainable technical score out of 100
+- Adjustable capital, risk %, allocation %, fees, slippage and USD/MYR assumption
+- Bursa board-lot sizing for ordinary shares
 
-1. Obtain a key from the provider subject to their current free-plan eligibility and usage terms.
-2. Open **Risk & Data Settings → Market Data**, enter the key, and press **Use key this session**.
-3. Go to **Stock Analysis**, select a symbol/timeframe, and press **Analyse**.
-4. The app makes a direct request from your browser to `/time_series` with `interval=1h`, `4h`, `1day`, or `1week`.
-5. If browser CORS rules, rate limits, lack of entitlement, symbol lookup problems or network errors prevent loading, the app **clearly falls back to SIMULATED DEMO** and displays an error toast. Do not mistake fallback data for a live quote.
+The score is a rules-based research summary, not a probability forecast or guaranteed signal.
 
-A key is saved only in **sessionStorage** for this tab/session, not bundled or added to a repository. It may still appear in browser network requests; use a personal, low-privilege, limited API key. Public users enter their own keys.
+## Current limitations
 
-**Public display / licensing:** Market-data providers may forbid redistribution or public display even when an API allows personal queries. You must review the provider's permitted uses before deploying for others. The software includes no publicly cached third-party market-data files.
-
-## Position sizing and risk rules
-
-- Initial settings: **RM20,000** reference capital, **1%** planned risk per trade, **25%** maximum position allocation. All adjustable.
-- Includes separate configurable **Bursa** and **US** brokerage fee assumptions, minimum fees, and estimated slippage per side.
-- For US shares, capital allocation is converted using your **manual** USD/MYR rate. It is not a current market FX quote.
-- For ordinary Bursa shares, quantity is rounded down to multiples of **100**, and to whole units for US stocks / ETFs. Instrument-specific odd-lot or board-lot exceptions are not modeled.
-- Quantity is capped to meet BOTH maximum allocation and estimated loss at the invalidation/stop price after approximate two-sided fees and slippage.
-- TP1 and TP2 risk/reward calculations estimate net returns using projected commissions and slippage.
-- **Risk limits are NOT guarantees**: overnight gaps, trading halts, spreads, taxes, levies, FX charges, liquidity, order rejection and fills outside the stop can cause larger losses.
-- Risk calculations are not a recommendation to allocate your maximum allowable budget.
-
-## Technical analysis
-
-Currently implemented:
-
-- SMA 20, 50 and 200 (SMA200 is not reported if fewer than 200 candles)
-- RSI14 (Wilder smoothing)
-- MACD (12/26 EMAs, 9-period signal), histogram
-- Wilder ATR14
-- Bollinger Bands (20, 2 standard deviations)
-- Relative Volume (most recent volume compared to previous 20 bars)
-- Approximate support/resistance from local swing extrema
-- Fibonacci 38.2% and 61.8% of recent 60-bar high–low range
-- Conditional Buy Lower, Buy Breakout and Hold/Wait scenarios with invalidation and TP1/TP2/TP3
-- Price-based bullish/neutral/bearish research scenarios
-- Transparent score components (trend, momentum, price structure, volume, volatility)
-
-**Scores are descriptive technical-condition scores, not AI advice, probability estimates, statistical forecasts, or backtested performance claims.** News sentiment, external indices and financial fundamentals are explicitly marked unconnected. Warrants are flagged as needing a dedicated derivative model, and the normal equity trade-planning and score panels are not shown for them.
-
-## Watchlist, saved analysis and journal
-
-- Use the Watchlist button on the Stock Analysis screen.
-- Save Analysis creates a summary snapshot with inputs, levels and setups.
-- A trading journal records **closed** positions with currency, entry, exit, quantity, costs and notes.
-- Export the whole personal workspace JSON from Watchlist, or export journal CSV.
-- The initial journal displays the sum of net P/L only if all trades use the same currency; mixed-currency journals explicitly display **Mixed FX** instead of a meaningless sum.
-- Nothing syncs across devices in this version. Browser settings and private/incognito modes may erase your local storage. Regularly export backups.
-
-## Limitations and next milestones
-
-1. Reliable publicly displayable **US + Bursa** market data, company-name autocomplete from the provider and data-reliability validations.
-2. True universe-wide scanner, with rate-limit-conscious caching and market-specific eligibility checks.
-3. Warrant-specific pricing (mother stock, conversion ratio, exercise price, premium, expiry, bid/ask liquidity).
-4. Fundamental statement ingestion, sentiment/news citations, market regime & sector inputs.
-5. Scheduled alerting, backtesting and historical scoring with lookahead-safe methodology.
-6. Cross-device sync, backups and richer journal performance analytics.
-7. Robust exchange-session calendars, tick-size rules, corporate actions, and tax/levy models.
-
-No real-time market data, full-market live scanning, proven AI ratings, live alerts, or broker order placement are claimed in v0.1.
+1. Bursa live 1H/4H requires a future intraday provider; v0.2 will not fabricate it.
+2. The screener is still a demonstration-universe scanner, not a full-market real-time scanner.
+3. Fundamentals, news sentiment, broader-index regime and sector relative strength are not yet wired into the final score.
+4. Structured warrants still require a separate derivative model: underlying, expiry, exercise price, conversion ratio, premium, gearing, time decay and liquidity.
+5. Provider quotas and display/redistribution permissions can change.
+6. Risk calculations are planning estimates. Gaps, halts, spreads, fees, taxes, FX charges and execution differences can produce larger losses than the modelled stop loss.
 
 ## Developer notes
 
 Files:
 
-```
-index.html              Browser UI
-src/styles.css          Responsive fintech design
-src/engine.js           Pure analysis / position sizing math (ES module)
-src/app.js              User interface and source adapters (ES module)
-src/bundle.js           Generated zero-dependency browser bundle
-tools/build_bundle.py   Bundle generation, requires only Python 3
-sample_synthetic_4h.csv Example simulated OHLCV data
-tests/engine.test.mjs    Basic unit tests
+```text
+index.html
+src/styles.css
+src/engine.js
+src/app.js
+src/bundle.js
+api/health.js
+api/market.js
+api/search.js
+lib/market-shared.js
+.env.example
+vercel.json
+DEPLOY-GATEWAY.md
+tools/build_bundle.py
+tests/engine.test.mjs
 ```
 
-You can edit `index.html` and `src/styles.css` directly. If you modify `src/app.js` or `src/engine.js`, regenerate the distributable bundle:
+After editing `src/app.js` or `src/engine.js`, regenerate the static bundle:
 
 ```bash
-python tools/build_bundle.py
+npm run build
 ```
 
-To run the engine tests (Node.js required only for testing):
+Run the calculation tests:
 
 ```bash
 npm test
 ```
 
-## External references
+## Security rules
 
-- Twelve Data API: https://twelvedata.com/docs
-- GitHub Pages deployment: https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site
-- Market data rights: check each provider's contract and terms before public dissemination.
-
-Created as an educational research prototype. No affiliation with Bursa Malaysia, TradingView, market-data providers, or brokerage firms.
+- Never commit `.env`, provider tokens, broker passwords or personal financial data.
+- Do not move provider secrets into `index.html`, `src/` or browser localStorage/sessionStorage.
+- The gateway is read-only market data. It has no trading or broker credentials.
+- If the project becomes public, configure `BQ_ALLOWED_ORIGIN` to the exact frontend origin where practical.
