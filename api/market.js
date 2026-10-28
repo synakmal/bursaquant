@@ -1,4 +1,5 @@
-import { cors, json, fail, parseExchangeLocalToEpoch, cleanSymbol, positiveInt } from '../lib/market-shared.js';
+import { cors, json, fail, authorize, parseExchangeLocalToEpoch, cleanSymbol, positiveInt } from '../lib/market-shared.js';
+import {yahooMarket} from '../lib/yahoo.js';
 
 async function twelveData(symbol, interval, limit) {
   const key = process.env.TWELVE_DATA_API_KEY;
@@ -74,15 +75,20 @@ export default async function handler(req, res) {
   const market = String(req.query?.market || '').toUpperCase();
   const symbol = cleanSymbol(req.query?.symbol);
   const interval = String(req.query?.interval || '1day');
+  const requestedProvider=String(req.query?.provider||'auto').toLowerCase();
+  const provider=requestedProvider==='auto'?(process.env.BQ_DATA_PROVIDER==='yahoo'?'yahoo':market==='US'?'twelvedata':'isaham'):requestedProvider;
   const limit = positiveInt(req.query?.limit, 300, 55, 500);
   if (!['US','MY'].includes(market)) return fail(res, 400, 'INVALID_MARKET', 'market must be US or MY.');
   if (!symbol) return fail(res, 400, 'INVALID_SYMBOL', 'A ticker symbol is required.');
+  if(!['yahoo','twelvedata','isaham'].includes(provider))return fail(res,400,'INVALID_PROVIDER','Choose auto, yahoo, twelvedata or isaham.');
+  if(!authorize(req,res,{requirePrivate:provider==='yahoo'}))return;
+  if((provider==='twelvedata'&&market!=='US')||(provider==='isaham'&&market!=='MY'))return fail(res,400,'PROVIDER_MARKET_MISMATCH','This provider does not serve the selected market in this gateway.');
   try {
-    const result = market === 'US' ? await twelveData(symbol, interval, limit) : await isaham(symbol, interval, limit);
+    const result = provider==='yahoo'?await yahooMarket(symbol,market,interval,limit):provider==='twelvedata'?await twelveData(symbol, interval, limit):await isaham(symbol, interval, limit);
     if (result.bars.length < 55) return fail(res, 422, 'INSUFFICIENT_BARS', `Provider returned only ${result.bars.length} valid bars; at least 55 are required for the analysis engine.`);
     return json(res, 200, result);
   } catch (e) {
-    const status = e.code === 'BURSA_INTRADAY_NOT_AVAILABLE' ? 422 : (e.upstreamStatus === 429 ? 429 : 502);
+    const status = e.code === 'BURSA_INTRADAY_NOT_AVAILABLE' ? 422 : ([400,404,429,503].includes(e.upstreamStatus)?e.upstreamStatus:502);
     return fail(res, status, e.code || 'MARKET_DATA_ERROR', e.message || 'Market data request failed.');
   }
 };
