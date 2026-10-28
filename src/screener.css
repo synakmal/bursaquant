@@ -1,0 +1,29 @@
+.screen-builder { margin-bottom: 20px; }
+.screen-builder h3 { margin-top: 24px; }
+.screen-builder h3:first-child { margin-top: 0; }
+.screen-builder .filters { align-items: end; flex-wrap: wrap; }
+.screen-label { display: block; margin: 18px 0 8px; color: #a3b6d0; font-size: 12px; }
+#screenSymbols { width: 100%; min-height: 90px; box-sizing: border-box; padding: 12px; border: 1px solid #344665; border-radius: 8px; background: #0c1728; color: #e9f2ff; resize: vertical; font: inherit; line-height: 1.7; }
+#screenSymbols:disabled { opacity: .55; }
+.screen-file { position: relative; overflow: hidden; display: inline-flex; cursor: pointer; }
+.screen-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.screen-progress { color: #bed6ef; font-size: 12px; line-height: 1.8; margin-bottom: 0; }
+#screenDirectoryStatus { line-height: 1.8; overflow-wrap: anywhere; }
+.screen-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 20px; }
+.screen-evidence { min-width: 210px; max-width: 380px; margin-top: 9px; white-space: normal; }
+.screen-evidence summary, .screen-guide summary { cursor: pointer; color: #b6c9ff; }
+.screen-evidence p, .screen-evidence li { font-size: 11px; line-height: 1.8; }
+.screen-evidence ul { padding-left: 18px; }
+.screen-evidence li { margin: 10px 0; }
+.screen-guide { margin-top: 20px; line-height: 1.9; }
+.screen-guide p { font-size: 12px; color: #a3b6d0; }
+.screen-guide a { color: #b6c9ff; }
+#screenResults .pill { white-space: normal; line-height: 1.6; }
+#screenResults td { vertical-align: top; }
+#screenResults .small { max-width: 230px; white-space: normal; }
+.screen-builder .btn:disabled { cursor: default; }
+@media (max-width: 720px) {
+  .screen-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .screen-builder .filters label { flex: 1 1 140px; }
+  .screen-builder .row-buttons { flex-wrap: wrap; }
+}

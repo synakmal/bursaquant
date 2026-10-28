@@ -1,4 +1,6 @@
-# BursaQuant latest-data personal trial (v0.4)
+# BursaQuant latest-data personal trial (v0.5 source)
+
+The v0.5 source adds the real daily screener and accumulation/distribution checklist. Follow [SCREENER-START-HERE.md](SCREENER-START-HERE.md). These features reach the published site after the update is merged and deployed.
 
 The trial fetches Yahoo's latest available historical OHLCV candles and calculates your selected technical rating, support/resistance, conditional entries, targets and risk sizing. No Yahoo API key is needed by this unofficial adapter. Access, coverage and finality are not guaranteed; it does not provide unlimited request rights. Review Yahoo's terms before enabling automated access. Keep the data gateway personal and provider datasets out of public GitHub files.
 
@@ -19,7 +21,7 @@ This runs the site and gateway together, bound only to this PC. Keep that termin
 5. Open **Strategy & Learning**. Choose a preset or edit weights, then **Save & recalculate**. The local explainer shows the evidence for the rating.
 6. Set your capital and risk in **Risk & Data Settings**. Return to the analysis for position sizes and conditional entry/stop/TP scenarios. Save an analysis or add the instrument to your watchlist.
 
-The explainer is rules-based; a generative AI service, fundamentals and news are not connected. The screener is still a labelled demonstration universe. Single-stock analysis is the verified trial path.
+The explainer is rules-based; a generative AI service, fundamentals and news are not connected. The v0.5 screener makes real daily requests for a selected universe, and reports exactly what was checked. It does not automatically scan every listed instrument.
 
 ## Put the trial online while keeping GitHub
 

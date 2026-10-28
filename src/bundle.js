@@ -1,4 +1,4 @@
-/* Generated from engine.js and app.js by npm run build. */
+/* Generated from source modules by npm run build. */
 (()=>{
 /** BursaQuant educational analysis engine. No data fetching, no broker orders. */
 const DEFAULT_SETTINGS={capital:20000,riskPct:1,allocationPct:25,feePct:0.1,minFee:8,feePctUS:0,minFeeUS:0,slippagePct:0.15,usdMyr:4.30};
@@ -132,6 +132,203 @@ function parseCSV(text){
   rows.sort((a,b)=>a.time-b.time);rows=rows.filter((x,i,a)=>i===0||x.time!==a[i-1].time);if(rows.length<55)throw new Error('Fewer than 55 valid OHLC candles; check CSV fields and dates.');return rows;
 }
 
+const BQAccumulation=(()=>{
+/** Daily OHLCV research checklist. No investor-flow data, prediction or orders. */
+const DEFAULT_SCREEN_SETTINGS=Object.freeze({
+  minAverageVolume:50000,minAverageTurnover:100000,minPrice:0.1,
+  maxRangePct:12,maxBaseChangePct:8,maxDistanceToResistancePct:8,
+  cmfThreshold:0.05,obvPressureThreshold:0.1,maxContractionRatio:0.85,
+  minBreakoutRvol:1.5,breakoutBufferPct:0.2
+});
+const average=values=>values.reduce((sum,value)=>sum+value,0)/values.length;
+const rounded=value=>Number.isFinite(value)?Number(value.toFixed(6)):null;
+const limits={minAverageVolume:[0,1e12],minAverageTurnover:[0,1e15],minPrice:[0,1e8],maxRangePct:[0.1,100],maxBaseChangePct:[0.1,100],maxDistanceToResistancePct:[0.1,100],cmfThreshold:[0.001,1],obvPressureThreshold:[0.001,1],maxContractionRatio:[0.05,1],minBreakoutRvol:[1,100],breakoutBufferPct:[0,20]};
+function settingsFor(options){return Object.fromEntries(Object.entries(DEFAULT_SCREEN_SETTINGS).map(([key,fallback])=>{
+  const alias=key==='minAverageTurnover'?'minAvgTurnover':key==='minAverageVolume'?'minAvgVolume':key;
+  const value=options?.[key]??options?.[alias],[min,max]=limits[key];return [key,typeof value==='number'&&Number.isFinite(value)?Math.max(min,Math.min(max,value)):fallback];
+}));}
+function rangePct(rows){const high=Math.max(...rows.map(row=>row.high)),low=Math.min(...rows.map(row=>row.low));return (high-low)/((high+low)/2)*100;}
+function validPriceBar(row){return row&&['time','open','high','low','close'].every(key=>typeof row[key]==='number'&&Number.isFinite(row[key]))&&row.time>0&&row.open>0&&row.close>0&&row.low>0&&row.high>=Math.max(row.open,row.close)&&row.low<=Math.min(row.open,row.close);}
+
+/**
+ * Input bars must describe completed daily candles. The caller owns freshness and
+ * interval checks. All measurements use the supplied history only, never future bars.
+ * Average turnover is mean(close * volume), an approximation in quote currency.
+ */
+function evaluateAccumulation(bars,options={}){
+  let latestCandle=Array.isArray(bars)&&bars.length?bars.at(-1)?.time??null:null;
+  const settings=settingsFor(options),conditions=[],warnings=[
+    'Price/volume indicators are pressure proxies; they do not identify investors or prove accumulation. Every executed trade has a buyer and seller.',
+    'The checklist and score are unvalidated research rules, not a probability of profit or a prediction of a price surge.'
+  ];
+  const add=(id,label,met,value,rule,reason)=>conditions.push({id,label,met,value,rule,reason});
+  const result=(classification,status,score,metrics={},reason='')=>({classification,status,score,eligible:classification==='accumulation'||classification==='breakout',metrics,conditions,reasons:reason?[reason]:conditions.filter(condition=>condition.met===false||condition.met===null).map(condition=>condition.reason),warnings,settings,barsUsed:Array.isArray(bars)?bars.length:0,lastCandle:latestCandle});
+  if(!Array.isArray(bars)||bars.length<60){add('history','Daily history',false,Array.isArray(bars)?bars.length:0,'At least 60 completed daily candles','At least 60 completed daily candles are required.');return result('insufficient','Insufficient data',null,{},'At least 60 completed daily candles are required.');}
+  if(bars.some(row=>!validPriceBar(row))){add('history','Daily history',false,null,'Valid OHLC boundaries and numeric timestamps','One or more price candles are invalid; no candidate was inferred.');return result('insufficient','Insufficient data',null,{},'Invalid OHLC or timestamp data.');}
+  const rows=bars.slice().sort((left,right)=>left.time-right.time);
+  latestCandle=rows.at(-1).time;
+  if(rows.some((row,index)=>index>0&&row.time===rows[index-1].time)){add('history','Daily history',false,null,'Distinct candle timestamps','Duplicate candle timestamps must be resolved before screening.');return result('insufficient','Insufficient data',null,{},'Duplicate candle timestamps.');}
+  add('history','Daily history',true,rows.length,'At least 60 completed daily candles',`${rows.length} supplied candles; 120 or more is preferable for context.`);
+  const current=rows.at(-1),recent=rows.slice(-20),previous=rows.slice(-40,-20),priorBase=rows.slice(-21,-1),volumeWindow=rows.slice(-41);
+  const volumeValid=volumeWindow.every(row=>typeof row.volume==='number'&&Number.isFinite(row.volume)&&row.volume>=0);
+  const positiveVolumeBars=volumeValid?recent.filter(row=>row.volume>0).length:0;
+  const hasVolume=volumeValid&&positiveVolumeBars>=16&&current.volume>0;
+  add('volumeCoverage','Usable volume',hasVolume,positiveVolumeBars,'Valid non-negative volume over 41 candles; positive volume on at least 16 of the latest 20 and on the latest candle',hasVolume?'Volume coverage meets the checklist requirement.':'Missing volume or too many zero-volume candles; pressure signals are unavailable.');
+  const price=current.close,baseRange=rangePct(recent),priorRange=rangePct(previous),priorResistance=Math.max(...priorBase.map(row=>row.high));
+  const priceChangePct=(price/rows.at(-21).close-1)*100,distanceToResistancePct=(priorResistance-price)/priorResistance*100;
+  const trueRangePct=rows.map((row,index)=>index===0?null:Math.max(row.high-row.low,Math.abs(row.high-rows[index-1].close),Math.abs(row.low-rows[index-1].close))/rows[index-1].close*100);
+  const atrPct=average(trueRangePct.slice(-14)),previousAtrPct=average(trueRangePct.slice(-28,-14));
+  const rangeContraction=priorRange>0?baseRange/priorRange:null,atrContraction=previousAtrPct>0?atrPct/previousAtrPct:null;
+  const averageVolume=hasVolume?average(recent.map(row=>row.volume)):null,averageTurnover=hasVolume?average(recent.map(row=>row.close*row.volume)):null;
+  const priorAverageVolume=hasVolume?average(priorBase.map(row=>row.volume)):null,rvol=priorAverageVolume>0?current.volume/priorAverageVolume:null;
+  let cmf20=null,obvPressure=null,upDownVolumeRatio=null;
+  if(hasVolume){
+    const totalVolume=recent.reduce((sum,row)=>sum+row.volume,0);
+    cmf20=recent.reduce((sum,row)=>sum+(row.high===row.low?0:((row.close-row.low)-(row.high-row.close))/(row.high-row.low))*row.volume,0)/totalVolume;
+    let signedVolume=0,upVolume=0,downVolume=0;
+    for(let index=rows.length-20;index<rows.length;index++){
+      const change=rows[index].close-rows[index-1].close,volume=rows[index].volume;
+      signedVolume+=Math.sign(change)*volume;if(change>0)upVolume+=volume;else if(change<0)downVolume+=volume;
+    }
+    obvPressure=signedVolume/totalVolume;
+    // A zero denominator stays unavailable rather than creating an infinite ratio.
+    upDownVolumeRatio=downVolume>0?upVolume/downVolume:null;
+  }
+  const metrics=Object.fromEntries(Object.entries({price,rangePct:baseRange,rangeContraction,atrPct,atrContraction,cmf20,obvPressure,upDownVolumeRatio,rvol,priorResistance,distanceToResistancePct,averageVolume,averageTurnover,priceChangePct,positiveVolumeBars}).map(([key,value])=>[key,rounded(value)]));
+  if(rows.length<120)warnings.push('Fewer than 120 daily candles were supplied; longer-term context is limited.');
+  warnings.push('Average turnover is mean daily close × volume in the instrument quote currency, not actual executed turnover.');
+  const liquid=hasVolume?price>=settings.minPrice&&averageVolume>=settings.minAverageVolume&&averageTurnover>=settings.minAverageTurnover:null;
+  const consolidating=baseRange<=settings.maxRangePct&&Math.abs(priceChangePct)<=settings.maxBaseChangePct;
+  const contracting=(rangeContraction!==null&&rangeContraction<=settings.maxContractionRatio)||(atrContraction!==null&&atrContraction<=settings.maxContractionRatio);
+  const positiveFlow=hasVolume?cmf20>=settings.cmfThreshold:null,positiveObv=hasVolume?obvPressure>=settings.obvPressureThreshold:null;
+  const nearResistance=distanceToResistancePct>=0&&distanceToResistancePct<=settings.maxDistanceToResistancePct;
+  add('liquidity','Liquidity floor',liquid,metrics.averageTurnover,`Price ≥ ${settings.minPrice}; average volume ≥ ${settings.minAverageVolume}; approximate daily turnover ≥ ${settings.minAverageTurnover} in quote currency`,liquid?'The configured liquidity floors are met.':hasVolume?'The configured price, volume or turnover floor is not met.':'Liquidity cannot be evaluated without usable volume.');
+  add('consolidation','Quiet price base',consolidating,metrics.rangePct,`20-candle range ≤ ${settings.maxRangePct}%; absolute 20-candle price change ≤ ${settings.maxBaseChangePct}%`,consolidating?'Recent prices form a relatively narrow base.':'The recent price range or price move is too large for this quiet-base checklist.');
+  add('contraction','Contracting movement',contracting,metrics.atrContraction,`20-candle range ratio or 14-candle true-range percentage ratio ≤ ${settings.maxContractionRatio} versus the previous window`,contracting?'Range or movement has contracted versus the preceding window.':'No qualifying contraction was observed; zero comparison ranges are unavailable.');
+  add('moneyFlow','Positive close-location pressure',positiveFlow,metrics.cmf20,`CMF20 ≥ ${settings.cmfThreshold}`,positiveFlow?'Closes weighted by volume favour the upper parts of candles.':hasVolume?'CMF20 does not meet the positive-pressure threshold.':'CMF20 is unavailable because volume coverage is insufficient.');
+  add('obv','Positive directional-volume pressure',positiveObv,metrics.obvPressure,`20-candle signed volume / total volume ≥ ${settings.obvPressureThreshold}`,positiveObv?'More recent volume accompanies rising closes than falling closes.':hasVolume?'Directional-volume pressure does not meet the positive threshold.':'Directional-volume pressure is unavailable because volume coverage is insufficient.');
+  add('resistance','Below and near prior resistance',nearResistance,metrics.distanceToResistancePct,`Close 0–${settings.maxDistanceToResistancePct}% below the preceding 20-candle high, excluding the current candle`,nearResistance?'Price remains below and near the observed prior high.':'Price is above prior resistance or farther below it than the configured limit.');
+  const breakout=hasVolume&&price>priorResistance*(1+settings.breakoutBufferPct/100)&&rvol>=settings.minBreakoutRvol&&positiveFlow&&positiveObv&&rangePct(priorBase)<=settings.maxRangePct;
+  add('breakout','Price/volume breakout',hasVolume?!!breakout:null,metrics.rvol,`Close > prior 20-candle high + ${settings.breakoutBufferPct}%; RVOL ≥ ${settings.minBreakoutRvol}; positive pressure; preceding base range ≤ ${settings.maxRangePct}%`,breakout?'A close beyond the previous base is accompanied by qualifying volume and pressure.':hasVolume?'The complete price/volume breakout checklist is not met.':'Breakout volume confirmation is unavailable.');
+  if(!hasVolume)return result('insufficient','Insufficient data',null,metrics,'Usable volume is required for accumulation/distribution screening.');
+  const score=(consolidating?20:0)+(contracting?20:0)+(positiveFlow?20:0)+(positiveObv?20:0)+(nearResistance?10:0)+(liquid?10:0);
+  if(liquid&&breakout)return result('breakout','Breakout candidate',score,metrics);
+  if(liquid&&consolidating&&contracting&&positiveFlow&&positiveObv&&nearResistance)return result('accumulation','Quiet accumulation candidate',score,metrics);
+  if(liquid&&cmf20<=-settings.cmfThreshold&&obvPressure<=-settings.obvPressureThreshold)return result('distribution','Distribution pressure',score,metrics);
+  return result('none','No clear setup',score,metrics);
+}
+
+return {DEFAULT_SCREEN_SETTINGS,evaluateAccumulation};
+})();
+const BQScanRunner=(()=>{
+// Real-data screening utilities. Requests are sequential, bounded and resumable.
+function screenInstrument(value, marketHint='all') {
+  const raw=typeof value==='object'&&value?value:{symbol:value};
+  let ticker=String(raw.symbol||'').trim().toUpperCase(),market=String(raw.market||marketHint).toUpperCase();
+  const explicitMarket=String(raw.market||'').toUpperCase();
+  if(explicitMarket&&!['MY','US','ALL'].includes(explicitMarket))return null;
+  const prefix=ticker.match(/^([A-Z]+):/);
+  if(prefix){if(!['MY','US'].includes(prefix[1])||(['MY','US'].includes(explicitMarket)&&prefix[1]!==explicitMarket))return null;market=prefix[1];ticker=ticker.slice(prefix[0].length);}
+  if(/\.KL$/.test(ticker)){if(prefix?.[1]==='US'||explicitMarket==='US')return null;market='MY';ticker=ticker.slice(0,-3);}
+  if(!['MY','US'].includes(market))market=/^\d{4}$/.test(ticker)?'MY':'US';
+  if(market==='US')ticker=ticker.replace(/\./g,'-');
+  const type=({stock:'Stock',equity:'Stock',etf:'ETF'})[String(raw.type||'Stock').toLowerCase()];
+  if(!['Stock','ETF'].includes(type))return null;
+  // Custom Bursa warrant codes are intentionally excluded until a derivative
+  // security master is connected. Numeric ordinary-share codes preserve zeros.
+  if(market==='MY'&&!/^\d{4}$/.test(ticker))return null;
+  if(market==='US'&&(!/^[A-Z][A-Z0-9.-]{0,14}$/.test(ticker)||/(?:[-.](?:W|WS|WT|U|R))$/.test(ticker)))return null;
+  if(['SYMBOL','TICKER','CODE'].includes(ticker))return null;
+  return {symbol:ticker,name:String(raw.name||ticker).slice(0,180),market,currency:market==='MY'?'MYR':'USD',exchange:String(raw.exchange||(market==='MY'?'BURSA':'US')),type};
+}
+
+function parseScreenSymbols(text, market='all') {
+  const seen=new Set(),instruments=[],rejected=[];
+  for(const token of String(text||'').slice(0,200000).split(/[\s,;]+/).filter(Boolean)){
+    const item=screenInstrument(token,market);
+    if(!item){rejected.push(token.slice(0,32));continue;}
+    const key=item.market+':'+item.symbol;if(seen.has(key))continue;seen.add(key);instruments.push(item);
+    if(instruments.length>=12000)break;
+  }
+  return {instruments,rejected};
+}
+
+function parseScreenListFile(text,market='all') {
+  const lines=String(text||'').replace(/^\uFEFF/,'').split(/\r?\n/).filter(line=>line.trim());
+  const fields=line=>[...line.matchAll(/(?:^|,)(?:"((?:[^"]|"")*)"|([^,]*))/g)].map(match=>(match[1]??match[2]??'').replace(/""/g,'"').trim());
+  const header=fields(lines[0]||'').map(value=>value.toLowerCase()),symbolIndex=header.findIndex(value=>['symbol','ticker','code'].includes(value));
+  if(symbolIndex<0)return parseScreenSymbols(text,market);
+  const marketIndex=header.indexOf('market'),nameIndex=header.indexOf('name'),typeIndex=header.indexOf('type'),instruments=[],rejected=[],seen=new Set();
+  for(const line of lines.slice(1)){
+    const cells=fields(line),raw=cells[symbolIndex],item=screenInstrument({symbol:raw,market:marketIndex>=0?cells[marketIndex]:market,name:nameIndex>=0?cells[nameIndex]:raw,type:typeIndex>=0?cells[typeIndex]:'Stock'});
+    if(!item){rejected.push(String(raw||'').slice(0,32));continue;}const key=item.market+':'+item.symbol;if(seen.has(key))continue;seen.add(key);instruments.push(item);
+    if(instruments.length>=12000)break;
+  }
+  return {instruments,rejected};
+}
+
+function createScreenRun(instruments, context={}) {
+  const seen=new Set(),queue=[];
+  for(const raw of instruments){const item=screenInstrument(raw);if(!item)continue;const key=item.market+':'+item.symbol;if(seen.has(key))continue;seen.add(key);queue.push(item);}
+  return {version:1,context:{...context,interval:'1day'},queue,results:[],cursor:0,startedAt:new Date().toISOString(),updatedAt:null,pausedReason:'',running:false};
+}
+
+function screenCoverage(run) {
+  const counts={total:run?.queue?.length||0,checked:run?.results?.length||0,analysed:0,failed:0,insufficient:0,stale:0,candidates:0};
+  for(const row of run?.results||[]){
+    if(row.error)counts.failed++;
+    else if(row.stale)counts.stale++;
+    else if(row.evaluation?.classification==='insufficient')counts.insufficient++;
+    else {counts.analysed++;if(['accumulation','breakout'].includes(row.evaluation?.classification))counts.candidates++;}
+  }
+  counts.remaining=Math.max(0,counts.total-counts.checked);return counts;
+}
+
+function usableDailyBars(data) {
+  if(!Array.isArray(data?.bars)||!data.meta||data.meta.interval!=='1day')throw new Error('Daily provider candles were not supplied.');
+  if(!['yahoo','isaham','twelvedata'].includes(data.meta.provider))throw new Error('A recognised market-data source is required. Simulated data is excluded.');
+  if(data.meta.completedCandles!==true)throw new Error('The gateway cannot establish completed daily candles for this source.');
+  if(!data.bars.length)throw new Error('No daily candles were supplied.');
+  if(data.meta.instrumentType&&!['EQUITY','ETF'].includes(String(data.meta.instrumentType).toUpperCase()))throw new Error('This instrument is not an eligible stock or ETF.');
+  // Do not repair malformed or duplicated history silently: these affect volume
+  // indicators and the reference window used for a candidate classification.
+  let previous=-Infinity;
+  for(const b of data.bars){
+    if(!['time','open','high','low','close','volume'].every(k=>typeof b[k]==='number'&&Number.isFinite(b[k]))||b.time<=previous||b.open<=0||b.close<=0||b.low<=0||b.volume<0||b.high<Math.max(b.open,b.close)||b.low>Math.min(b.open,b.close)||b.high<b.low)throw new Error('Provider history contains invalid, unordered or duplicate candles.');
+    previous=b.time;
+  }
+  return data.bars;
+}
+
+async function scanDailyBatch(run,{request,evaluate,onUpdate=()=>{},shouldStop=()=>false,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),batchSize=25,spacingMs=1500,now=()=>Date.now(),maxAgeDays=7}={}) {
+  if(run.running)return run;
+  const count=Math.max(1,Math.min(25,Math.trunc(Number(batchSize)||25))),end=Math.min(run.queue.length,run.cursor+count);
+  run.running=true;run.pausedReason='';onUpdate(run);
+  try {
+    while(run.cursor<end&&!shouldStop()){
+      const instrument=run.queue[run.cursor];let row,rateLimited=false;
+      try {
+        const data=await request(instrument),bars=usableDailyBars(data),last=bars.at(-1)?.time;
+        const stale=!last||last>now()/1000||now()/1000-last>maxAgeDays*86400;
+        row={instrument,meta:data.meta,lastCandle:last?new Date(last*1000).toISOString():null,fetchedAt:data.meta.fetchedAt||new Date(now()).toISOString(),stale,evaluation:stale?null:evaluate(bars,instrument)};
+      }catch(error){
+        rateLimited=error.status===429||error.code==='YAHOO_RATE_LIMITED';
+        row={instrument,error:String(error.message||'Data unavailable').slice(0,350),checkedAt:new Date(now()).toISOString()};
+      }
+      run.results.push(row);run.cursor++;run.updatedAt=new Date(now()).toISOString();onUpdate(run);
+      if(rateLimited){run.pausedReason='Provider rate limit reached. This scan stopped; respect the provider pause before continuing.';break;}
+      if(run.cursor<end&&!shouldStop())await wait(Math.max(1500,Number(spacingMs)||1500));
+    }
+    if(shouldStop())run.pausedReason='Paused by you. Completed results are retained.';
+    else if(!run.pausedReason&&run.cursor<run.queue.length)run.pausedReason='Batch complete. Continue explicitly to scan the next batch.';
+  }finally{run.running=false;onUpdate(run);}
+  return run;
+}
+
+return {screenInstrument,parseScreenSymbols,parseScreenListFile,createScreenRun,screenCoverage,usableDailyBars,scanDailyBatch};
+})();
+const {evaluateAccumulation,DEFAULT_SCREEN_SETTINGS}=BQAccumulation;
+const {screenInstrument,parseScreenSymbols,parseScreenListFile,createScreenRun,screenCoverage,scanDailyBatch}=BQScanRunner;
 const instruments=[
  {symbol:'AAPL',name:'Apple Inc.',market:'US',exchange:'NASDAQ',currency:'USD',type:'Stock'},
  {symbol:'NVDA',name:'NVIDIA Corporation',market:'US',exchange:'NASDAQ',currency:'USD',type:'Stock'},
@@ -160,6 +357,10 @@ if(!['auto','yahoo','twelvedata','isaham'].includes(dataProvider))dataProvider='
 let requestSeq=0,activeDataKey='',dataError='';
 let lastProviderMeta=null;
 let ratingStrategy=normalizeStrategy(load('ratingStrategy',null));
+let screenRun=load('screenRun',null),screenDirectory=load('screenDirectory',null),screenStop=false,screenLoading=false,screenDirectorySeq=0,screenVisible=100;
+if(screenRun?.version!==1||!Array.isArray(screenRun?.queue)||!Array.isArray(screenRun?.results))screenRun=null;
+if(screenRun)screenRun.running=false;
+if(!Array.isArray(screenDirectory?.instruments))screenDirectory=null;
 function notify(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),4200)}
 function fmt(v,dec=2){return Number.isFinite(v)?Number(v).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec}):'—'};
 const money=(v,currency=symbol.currency)=>`${currency==='USD'?'$':'RM'}${fmt(v,v>1?2:4)}`;
@@ -228,7 +429,7 @@ function clearAnalysis(message,kind='DATA UNAVAILABLE'){
   $('watchBtn').textContent=watchlist.includes(symbol.symbol)?'★ In watchlist':'☆ Watchlist';$('watchCount').textContent=watchlist.length;$('saveAnalysis').disabled=true;$('exportAiBrief').disabled=true;$('chartTooltip').classList.add('hidden');$('priceCanvas').width=$('priceCanvas').width;$('activeStrategyLabel').textContent=`Rating strategy: ${ratingStrategy.name} · awaiting data`;
 }
 function gatewayUrl(path){const base=(gatewayBase||'/api').replace(/\/$/,'');return base+path;}
-async function gatewayFetch(path){const resp=await fetch(gatewayUrl(path),{cache:'no-store',headers:{Accept:'application/json',...(gatewayAccessCode?{'X-BQ-Access-Token':gatewayAccessCode}:{})}});let data=null;try{data=await resp.json()}catch{}if(!resp.ok)throw new Error(data?.error?.message||data?.message||`Gateway HTTP ${resp.status}`);return data;}
+async function gatewayFetch(path){const resp=await fetch(gatewayUrl(path),{cache:'no-store',headers:{Accept:'application/json',...(gatewayAccessCode?{'X-BQ-Access-Token':gatewayAccessCode}:{})}});let data=null;try{data=await resp.json()}catch{}if(!resp.ok)throw Object.assign(new Error(data?.error?.message||data?.message||`Gateway HTTP ${resp.status}`),{status:resp.status,code:data?.error?.code});return data;}
 async function fetchOrDemo(){
   if(demoMode){loadDemo(false);return;}
   if(!gatewayBase){clearAnalysis('Set your gateway URL in Risk & Data Settings, or choose Load Demo.');return;}
@@ -320,10 +521,89 @@ function renderWatch(){const items=$('watchItems');items.innerHTML=watchlist.len
   items.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>{setPage('analysis');chooseSymbol(b.dataset.open)}));items.querySelectorAll('[data-remove]').forEach(b=>b.addEventListener('click',()=>{watchlist=watchlist.filter(s=>s!==b.dataset.remove);persist('watchlist',watchlist);renderWatch();$('watchCount').textContent=watchlist.length}));
   $('savedItems').innerHTML=snapshots.length?snapshots.map((s,i)=>`<div class="watch-item"><div><strong>${htmlEscape(s.symbol)} · ${htmlEscape(s.timeframe)}</strong><div class="sub">${htmlEscape(s.date)} • ${htmlEscape(s.source)} • ${s.score??'N/A'}/100 • ${htmlEscape(s.verdict)}</div></div><button class="btn sm ghost" data-deletesnap="${i}">Remove</button></div>`).join(''):'<div class="empty">No saved analyses yet. Save a snapshot from the Stock Analysis view.</div>';
   $('savedItems').querySelectorAll('[data-deletesnap]').forEach(b=>b.addEventListener('click',()=>{snapshots.splice(Number(b.dataset.deletesnap),1);persist('snapshots',snapshots);renderWatch()}));}
-function renderScreener(){const market=$('screenMarket').value,min=Number($('screenMin').value)||0,filter=$('screenSetup').value;const pool=instruments.filter(x=>x.type!=='Warrant');if(!pool.find(x=>x.symbol===symbol.symbol)&&symbol.type!=='Warrant')pool.unshift(symbol);
-  const rows=pool.map(x=>{const isActive=!!currentAnalysis&&x.symbol===symbol.symbol&&source!=='SIMULATED DEMO'&&source!=='DATA UNAVAILABLE'&&source!=='LOADING DATA';const a=isActive?currentAnalysis:analyse(generateDemo(x.symbol,'4h'),'swing',ratingStrategy);return {x,a,source:isActive?source:'SIMULATED'}}).filter(v=>(market==='all'||v.x.market===market)&&(v.a.score!==null?v.a.score>=min:min===0)&&(filter==='all'||(filter==='bullish'&&v.a.trend==='Bullish')||(filter==='lower'&&v.a.plans[0].entry<v.a.price))).sort((a,b)=>(b.a.score??-1)-(a.a.score??-1));
-  $('screenResults').innerHTML=rows.length?rows.map(({x,a,source:src})=>`<tr><td><strong>${htmlEscape(x.symbol)}</strong><div class="muted small">${htmlEscape(x.name)} · ${src}</div></td><td>${x.market}</td><td class="right">${money(a.price,x.currency)}</td><td class="right"><strong>${a.score??'N/A'}/100</strong></td><td class="${a.trend==='Bullish'?'up':a.trend==='Bearish'?'down':''}">${a.trend}</td><td class="right">${money(a.levels.support,x.currency)}</td><td class="right">${money(a.levels.resistance,x.currency)}</td><td><button class="btn sm secondary" data-screenticker="${htmlEscape(x.symbol)}">Analyse</button></td></tr>`).join(''):'<tr><td colspan="8" class="empty">No symbols meet those filters.</td></tr>';
-  $('screenResults').querySelectorAll('[data-screenticker]').forEach(b=>b.addEventListener('click',()=>{setPage('analysis');chooseSymbol(b.dataset.screenticker)}));}
+function screenControls(){return {
+  market:$('screenMarket').value,universe:$('screenUniverse').value,symbols:$('screenSymbols').value,
+  minAverageVolume:Number($('screenVolume').value),turnoverMY:Number($('screenTurnoverMY').value),turnoverUS:Number($('screenTurnoverUS').value),maxRangePct:Number($('screenRange').value),cmfThreshold:Number($('screenCmf').value)
+};}
+function screenSignature(){const c=screenControls();return JSON.stringify({...c,provider:dataProvider,gateway:gatewayBase,directory:c.universe==='directory'?screenDirectory?.meta?.fetchedAt||'':null});}
+function screenDate(value,market){if(!value)return '—';try{return new Date(value).toLocaleDateString('en-GB',{timeZone:market==='MY'?'Asia/Kuala_Lumpur':'America/New_York',day:'2-digit',month:'short',year:'numeric'});}catch{return 'Unknown';}}
+function renderScreener(){
+  const run=screenRun,counts=screenCoverage(run),active=!!run?.running,market=$('screenMarket').value,filter=$('screenSetup').value,min=Number($('screenMin').value)||0;
+  const same=!!run&&run.context?.signature===screenSignature();
+  $('screenSymbols').disabled=active||$('screenUniverse').value==='directory';
+  for(const id of ['screenMarket','screenUniverse','screenVolume','screenTurnoverMY','screenTurnoverUS','screenRange','screenCmf','screenListFile','screenUseWatchlist'])$(id).disabled=active;
+  $('loadScreenDirectory').disabled=active||screenLoading||market==='all';$('runScreen').disabled=active||screenLoading;
+  $('continueScreen').disabled=active||!same||counts.remaining===0;$('stopScreen').disabled=!active;$('exportScreen').disabled=!counts.checked;
+  $('screenStats').innerHTML=[['Universe',counts.total,'Selected instruments'],['Checked',counts.checked,counts.remaining+' remaining'],['Analysed',counts.analysed,counts.candidates+' candidate findings'],['Unavailable',counts.failed+counts.insufficient+counts.stale,counts.failed+' failed · '+counts.insufficient+' insufficient · '+counts.stale+' stale']].map(([label,value,note])=>`<div class="metric"><div class="label">${label}</div><div class="value">${value}</div><div class="detail">${note}</div></div>`).join('');
+  $('screenProgress').textContent=!run?'No scan started. Requests run sequentially in small batches and pause at provider rate limits.':active?`Checking ${Math.min(run.cursor+1,counts.total)} of ${counts.total}. Completed: ${counts.checked}. You can pause after the current request.`:`${counts.checked} of ${counts.total} checked. ${run.pausedReason||'Selected universe finished.'}${same?'':' Universe, checklist or gateway settings changed; start a new scan to apply them.'} ${run.updatedAt?'Last checked: '+new Date(run.updatedAt).toLocaleString()+'.':''}`;
+  const rows=(run?.results||[]).filter(row=>{
+    if(market!=='all'&&row.instrument?.market!==market)return false;
+    const unavailable=!!row.error||row.stale||row.evaluation?.classification==='insufficient';
+    if(filter==='unavailable')return unavailable;
+    if(filter!=='all'&&row.evaluation?.classification!==filter)return false;
+    return row.evaluation?.score===null||row.evaluation?.score===undefined?min===0:row.evaluation.score>=min;
+  }).slice().sort((a,b)=>(b.evaluation?.score??-1)-(a.evaluation?.score??-1));
+  $('screenResults').innerHTML=rows.length?rows.slice(0,screenVisible).map(row=>{
+    const x=row.instrument||{},e=row.evaluation,m=e?.metrics||{},status=row.error?'Request failed':row.stale?'Stale or invalid date':e?.status||'Unavailable';
+    const reason=row.error||(row.stale?'Latest supplied daily candle is future-dated or older than seven calendar days.':e?.reasons?.join(' ')||'All mandatory conditions for this finding were met.');
+    const evidence=(e?.conditions||[]).map(c=>`<li><strong>${c.met===null?'Unknown':c.met?'Met':'Unmet'} · ${htmlEscape(c.label)}</strong>: ${htmlEscape(c.rule)}. ${htmlEscape(c.reason)}</li>`).join('');
+    return `<tr><td><strong>${htmlEscape(x.symbol)}</strong><div class="muted small">${htmlEscape(row.meta?.name||x.name)} · ${htmlEscape(row.meta?.provider||'No data')}</div></td><td>${htmlEscape(x.market)}</td><td class="right">${Number.isFinite(m.price)?money(m.price,x.currency):'—'}</td><td class="right">${e?.score??'—'}${e?.score===null||e?.score===undefined?'':'/100'}</td><td><span class="pill ${e?.eligible?'actual':e?.classification==='distribution'?'risk':''}">${htmlEscape(status)}</span><details class="screen-evidence"><summary>View checks</summary><p>${htmlEscape(reason)}</p><ul>${evidence}</ul><p>Approx. daily turnover: ${Number.isFinite(m.averageTurnover)?money(m.averageTurnover,x.currency):'—'}; 20-day range: ${nfmt(m.rangePct)}%; signed-volume pressure: ${nfmt(m.obvPressure)}.</p><p class="muted small">Fetched: ${htmlEscape(row.fetchedAt||row.checkedAt||'Unknown')}. Candle completion is inferred. ${(e?.warnings||[]).map(htmlEscape).join(' ')}</p></details></td><td class="right">${nfmt(m.cmf20)}</td><td class="right">${Number.isFinite(m.rvol)?fmt(m.rvol,2)+'×':'—'}</td><td title="${htmlEscape(row.lastCandle||'')}">${htmlEscape(screenDate(row.lastCandle,x.market))}</td><td><button class="btn sm secondary" data-screenticker="${htmlEscape(x.symbol)}" data-screenmarket="${htmlEscape(x.market)}">Analyse</button></td></tr>`;
+  }).join(''):'<tr><td colspan="9" class="empty">'+(counts.checked?'No checked instruments match these result filters.':'Choose a universe, then start a real-data scan. No simulated results are included.')+'</td></tr>';
+  $('screenResultCount').textContent=`Showing ${Math.min(rows.length,screenVisible)} of ${rows.length} matching results. ${counts.checked} checked out of ${counts.total} selected instruments. Saved results retain their original dates; they are not automatically refreshed.`;
+  $('screenMore').classList.toggle('hidden',rows.length<=screenVisible);
+  $('screenResults').querySelectorAll('[data-screenticker]').forEach(b=>b.addEventListener('click',()=>{timeframe='1day';document.querySelectorAll('[data-tf]').forEach(t=>t.classList.toggle('selected',t.dataset.tf===timeframe));demoMode=false;persist('demoMode',false);setPage('analysis');chooseSymbol(b.dataset.screenticker,b.dataset.screenmarket);}));
+}
+async function loadScreenDirectory(){
+  const market=$('screenMarket').value;if(market==='all')return notify('Choose Bursa Malaysia or US before loading its directory.');
+  if(!gatewayBase)return notify('Connect your data gateway in Risk & Data Settings first.');
+  const seq=++screenDirectorySeq,base=gatewayBase;screenLoading=true;renderScreener();$('screenDirectoryStatus').textContent='Loading instrument identifiers only; no price scan has started.';
+  try {
+    const data=await gatewayFetch('/universe?market='+encodeURIComponent(market));
+    if(seq!==screenDirectorySeq||market!==$('screenMarket').value||base!==gatewayBase)return;
+    const items=(data.instruments||[]).map(x=>screenInstrument(x)).filter(x=>x&&x.market===market);
+    if(!items.length)throw new Error('The directory returned no eligible stocks or ETFs.');
+    screenDirectory={instruments:items,meta:{...data.meta,market}};persist('screenDirectory',screenDirectory);$('screenUniverse').value='directory';
+    $('screenDirectoryStatus').textContent=`${items.length.toLocaleString()} eligible instruments loaded. ${data.meta?.coverage||'Coverage is provider-dependent.'} Source date: ${data.meta?.asOf||'not supplied'}. Retrieved: ${data.meta?.fetchedAt||'unknown'}. No candles have been scanned yet.`;
+  }catch(error){if(seq===screenDirectorySeq)$('screenDirectoryStatus').textContent='Directory unavailable: '+error.message+' You can use a pasted or imported ticker list. A v0.4 gateway needs the screener update before it can load directories.';}
+  finally{if(seq===screenDirectorySeq){screenLoading=false;renderScreener();}}
+}
+async function runScreenBatch(fresh=false){
+  if(screenRun?.running)return;
+  if(!gatewayBase)return notify('Connect your gateway in Risk & Data Settings before scanning real data.');
+  const c=screenControls(),batch=Number($('screenBatch').value);
+  if(!Number.isInteger(batch)||batch<1||batch>25||![c.minAverageVolume,c.turnoverMY,c.turnoverUS,c.maxRangePct,c.cmfThreshold].every(Number.isFinite)||c.minAverageVolume<0||c.turnoverMY<0||c.turnoverUS<0||c.maxRangePct<0.1||c.maxRangePct>100||c.cmfThreshold<0.001||c.cmfThreshold>1)return notify('Review the checklist values and choose a batch of 1–25 stocks.');
+  if(fresh){
+    let pool;
+    if(c.universe==='directory'){
+      if(!screenDirectory||screenDirectory.meta?.market!==c.market)return notify('Load the selected market directory first, or choose My ticker list.');
+      pool=screenDirectory.instruments;
+    }else{const parsed=parseScreenSymbols(c.symbols,c.market);pool=parsed.instruments;if(parsed.rejected.length)notify(`${parsed.rejected.length} invalid or unsupported ticker entries excluded. Warrants are not screened.`);}
+    pool=pool.filter(x=>c.market==='all'||x.market===c.market);
+    if(!pool.length)return notify('Enter eligible stock tickers, use your watchlist or load a market directory.');
+    screenRun=createScreenRun(pool,{controls:c,signature:screenSignature(),provider:dataProvider,gateway:gatewayBase,directoryMeta:c.universe==='directory'?screenDirectory.meta:null,ruleVersion:'accumulation-v1',settings:{...DEFAULT_SCREEN_SETTINGS,...c}});screenVisible=100;
+  }else if(!screenRun||screenRun.context.signature!==screenSignature())return notify('Settings changed. Start a new scan to apply them.');
+  screenStop=false;persist('screenControls',c);const snapshot=screenRun,provider=dataProvider,base=gatewayBase;
+  await scanDailyBatch(snapshot,{
+    batchSize:batch,shouldStop:()=>screenStop||gatewayBase!==base||dataProvider!==provider,
+    request:item=>gatewayFetch(`/market?market=${encodeURIComponent(item.market)}&symbol=${encodeURIComponent(item.symbol)}&interval=1day&provider=${encodeURIComponent(provider)}&limit=250`),
+    evaluate:(bars,item)=>{const result=evaluateAccumulation(bars,{minAverageVolume:c.minAverageVolume,minAverageTurnover:item.market==='MY'?c.turnoverMY:c.turnoverUS,maxRangePct:c.maxRangePct,cmfThreshold:c.cmfThreshold});if(c.universe==='custom')result.warnings.push('Custom ticker security types are not independently verified. Confirm that the symbol is an ordinary stock or ETF.');return result;},
+    onUpdate:()=>renderScreener()
+  });
+  if(!persist('screenRun',snapshot))$('screenProgress').textContent+=' Browser storage is unavailable or full. Export these results before leaving this page.';
+}
+function registerScreener(){
+  const saved=screenRun?.context?.controls||load('screenControls',null);
+  if(saved){for(const [key,id] of Object.entries({market:'screenMarket',universe:'screenUniverse',symbols:'screenSymbols',minAverageVolume:'screenVolume',turnoverMY:'screenTurnoverMY',turnoverUS:'screenTurnoverUS',maxRangePct:'screenRange',cmfThreshold:'screenCmf'}))if(saved[key]!==undefined)$(id).value=saved[key];}
+  if(screenDirectory)$('screenDirectoryStatus').textContent=`Saved directory: ${screenDirectory.instruments.length.toLocaleString()} instruments (${screenDirectory.meta?.market}). ${screenDirectory.meta?.coverage||''} Retrieved: ${screenDirectory.meta?.fetchedAt||'unknown'}.`;
+  $('runScreen').onclick=()=>runScreenBatch(true);$('continueScreen').onclick=()=>runScreenBatch(false);
+  $('stopScreen').onclick=()=>{screenStop=true;$('screenProgress').textContent='Pausing after the current request. Completed results will be kept.';};
+  $('loadScreenDirectory').onclick=loadScreenDirectory;
+  $('screenUseWatchlist').onclick=()=>{const pool=watchlist.map(x=>screenInstrument(x)).filter(Boolean).filter(x=>$('screenMarket').value==='all'||x.market===$('screenMarket').value);$('screenSymbols').value=pool.map(x=>x.market+':'+x.symbol).join('\n');$('screenUniverse').value='custom';$('screenDirectoryStatus').textContent=`${pool.length} eligible watchlist symbols selected. This is your list, not an exchange-wide universe.`;renderScreener();};
+  $('screenListFile').addEventListener('change',async event=>{const file=event.target.files?.[0];if(!file)return;try{if(file.size>200000)throw new Error('Choose a ticker file smaller than 200 KB.');const data=parseScreenListFile(await file.text(),$('screenMarket').value);$('screenSymbols').value=data.instruments.map(x=>x.market+':'+x.symbol).join('\n');$('screenUniverse').value='custom';$('screenDirectoryStatus').textContent=`Imported ${data.instruments.length} eligible symbols; ${data.rejected.length} unsupported entries excluded. An imported list does not establish full-market coverage.`;renderScreener();}catch(error){notify('Ticker import failed: '+error.message);}event.target.value='';});
+  $('exportScreen').onclick=()=>{if(!screenRun)return;const {signature,gateway,...context}=screenRun.context;download('bursaquant-real-screen.json',JSON.stringify({version:1,context,queue:screenRun.queue,results:screenRun.results,cursor:screenRun.cursor,coverage:screenCoverage(screenRun),startedAt:screenRun.startedAt,updatedAt:screenRun.updatedAt,exportedAt:new Date().toISOString()},null,2),'application/json');};
+  for(const id of ['screenMarket','screenUniverse','screenMin','screenSetup','screenVolume','screenTurnoverMY','screenTurnoverUS','screenRange','screenCmf'])$(id).addEventListener('change',()=>{if(id==='screenMarket'){screenDirectorySeq++;screenLoading=false;}renderScreener();});
+  $('screenSymbols').addEventListener('input',renderScreener);$('screenMore').onclick=()=>{screenVisible+=100;renderScreener();};renderScreener();
+}
 function renderJournal(){const profits=trades.map(t=>(t.exit-t.entry)*t.quantity-t.fees),net=profits.reduce((a,b)=>a+b,0),wins=profits.filter(v=>v>0).length,ratio=trades.length?wins/trades.length*100:0;const metrics=[['Closed trades',trades.length,'All recorded'],['Winning trades',wins,'Profit after fees'],['Win rate',fmt(ratio,1)+'%','Historical, not predictive'],['Net P/L',fmt(net,2),'Mixed currencies: see note']];$('journalStats').innerHTML=metrics.map(([name,value,note])=>`<div class="metric"><div class="label">${name}</div><div class="value">${value}</div><div class="detail">${note}</div></div>`).join('');if(trades.some(t=>t.currency==='USD')&&trades.some(t=>t.currency==='MYR'))$('journalStats').lastElementChild.querySelector('.value').textContent='Mixed FX';
  $('tradeRows').innerHTML=trades.length?trades.map((t,i)=>{const pl=(t.exit-t.entry)*t.quantity-t.fees;return `<tr><td>${htmlEscape(t.date)}</td><td><strong>${htmlEscape(t.symbol)}</strong></td><td>${fmt(t.quantity,0)}</td><td>${money(t.entry,t.currency)}</td><td>${money(t.exit,t.currency)}</td><td class="${pl>=0?'up':'down'}">${money(pl,t.currency)}</td><td title="${htmlEscape(t.notes)}">${htmlEscape(t.notes.slice(0,45))}</td><td><button class="btn sm ghost" data-deltrade="${i}">×</button></td></tr>`}).join(''):'<tr><td colspan="8" class="empty">No journal trades yet.</td></tr>';$('tradeRows').querySelectorAll('[data-deltrade]').forEach(b=>b.addEventListener('click',()=>{trades.splice(Number(b.dataset.deltrade),1);persist('trades',trades);renderJournal()}));}
 function fillSettings(){const map={setCapital:'capital',setRisk:'riskPct',setAllocation:'allocationPct',setFee:'feePct',setMinFee:'minFee',setFeeUS:'feePctUS',setMinFeeUS:'minFeeUS',setSlippage:'slippagePct',setFx:'usdMyr'};Object.entries(map).forEach(([id,key])=>$(id).value=settings[key]);$('gatewayUrl').value=gatewayBase;$('dataProvider').value=dataProvider;$('gatewayAccessCode').value=gatewayAccessCode;}
@@ -331,7 +611,7 @@ function download(filename,text,type='text/plain'){const blob=new Blob([text],{t
 function exportJournal(){const clean=x=>'"'+String(x??'').replace(/"/g,'""')+'"';const cols=['date','symbol','currency','entry','exit','quantity','fees','notes'];download('bursaquant-journal.csv',[cols.join(','),...trades.map(t=>cols.map(k=>clean(t[k])).join(','))].join('\n'),'text/csv')}
 function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEventListener('click',()=>setPage(n.dataset.page)));$('menuBtn').onclick=()=>$('sidebar').classList.toggle('open');$('loadTicker').onclick=()=>chooseSymbol($('tickerInput').value);$('tickerInput').addEventListener('input',renderDropdown);$('tickerInput').addEventListener('keydown',e=>{if(e.key==='Enter')chooseSymbol(e.target.value);if(e.key==='Escape')$('searchResults').classList.add('hidden')});document.addEventListener('click',e=>{if(!e.target.closest('.search-wrapper'))$('searchResults').classList.add('hidden')});document.querySelectorAll('[data-tf]').forEach(btn=>btn.addEventListener('click',()=>{if(source==='CSV IMPORT'){notify('Imported CSV candle interval is fixed; re-import a different timeframe to change it.');return}timeframe=btn.dataset.tf;document.querySelectorAll('[data-tf]').forEach(x=>x.classList.toggle('selected',x.dataset.tf===timeframe));fetchOrDemo()}));$('modeSelect').addEventListener('change',e=>{style=e.target.value;updateAll()});$('watchBtn').onclick=()=>{if(watchlist.includes(symbol.symbol)){watchlist=watchlist.filter(s=>s!==symbol.symbol);notify('Removed from watchlist')}else{watchlist.unshift(symbol.symbol);notify('Added to watchlist')}persist('watchlist',watchlist);renderAnalysis();renderResearchAnswer()};$('saveAnalysis').onclick=()=>{if(!currentAnalysis)return notify('Load valid candles before saving an analysis.');const a=currentAnalysis;snapshots.unshift({date:new Date().toISOString().slice(0,16).replace('T',' '),symbol:symbol.symbol,timeframe,style,source,lastCandle:sourceAt||null,providerMetadata:lastProviderMeta,strategy:normalizeStrategy(ratingStrategy),score:symbol.type==='Warrant'?null:a.score,verdict:symbol.type==='Warrant'?'Derivative model pending':a.verdict,price:a.price,support:a.levels.support,resistance:a.levels.resistance,plans:symbol.type==='Warrant'?[]:a.plans.map(p=>({entry:p.entry,stop:p.stop,tp1:p.tp1,tp2:p.tp2}))});snapshots=snapshots.slice(0,100);persist('snapshots',snapshots);notify('Research snapshot saved locally')};
  $('csvInput').addEventListener('change',async e=>{const f=e.target.files?.[0];if(!f)return;const seq=++requestSeq,selected=selectionKey();try{const text=await f.text();if(seq!==requestSeq||selected!==selectionKey())return;const rows=parseCSV(text);candles=rows;activeDataKey='';lastProviderMeta=null;dataError='';$('refreshData').disabled=false;timeframe=$('csvTimeframe').value;document.querySelectorAll('[data-tf]').forEach(b=>b.classList.toggle('selected',b.dataset.tf===timeframe));setSource('CSV IMPORT',new Date(rows.at(-1).time*1000).toISOString());updateAll();notify(`Imported ${rows.length} valid candles. CSV replaces current chart only.`)}catch(err){$('refreshData').disabled=false;notify('CSV import failed: '+err.message)}e.target.value=''});
- $('runScreen').onclick=renderScreener;['screenMarket','screenMin','screenSetup'].forEach(id=>$(id).addEventListener('change',renderScreener));$('exportSaved').onclick=()=>download('bursaquant-backup.json',JSON.stringify({watchlist,snapshots,settings,trades,ratingStrategy,exportedAt:new Date().toISOString()},null,2),'application/json');$('exportJournal').onclick=exportJournal;
+ $('exportSaved').onclick=()=>download('bursaquant-backup.json',JSON.stringify({watchlist,snapshots,settings,trades,ratingStrategy,exportedAt:new Date().toISOString()},null,2),'application/json');$('exportJournal').onclick=exportJournal;
  $('journalForm').addEventListener('submit',e=>{e.preventDefault();const f=new FormData(e.target);const t={date:new Date().toISOString().slice(0,10),symbol:String(f.get('symbol')).trim().toUpperCase().slice(0,24),currency:String(f.get('currency')),entry:Number(f.get('entry')),exit:Number(f.get('exit')),quantity:Math.trunc(Number(f.get('quantity'))),fees:Number(f.get('fees'))||0,notes:String(f.get('notes')||'').trim().slice(0,250)};if(!t.symbol||!(t.entry>0)||t.exit<0||t.quantity<1||t.fees<0)return notify('Review trade values.');trades.unshift(t);persist('trades',trades);e.target.reset();renderJournal();notify('Closed trade saved locally')});
  $('settingsForm').addEventListener('submit',e=>{e.preventDefault();const read=id=>Number($(id).value);const obj={capital:read('setCapital'),riskPct:read('setRisk'),allocationPct:read('setAllocation'),feePct:read('setFee'),minFee:read('setMinFee'),feePctUS:read('setFeeUS'),minFeeUS:read('setMinFeeUS'),slippagePct:read('setSlippage'),usdMyr:read('setFx')};if(Object.values(obj).some(v=>!Number.isFinite(v))||obj.capital<=0||obj.riskPct<=0||obj.riskPct>10||obj.allocationPct<=0||obj.allocationPct>100||obj.usdMyr<=0||obj.feePct<0||obj.minFee<0||obj.feePctUS<0||obj.minFeeUS<0||obj.slippagePct<0)return notify('Invalid risk settings. Check positive capital, risk ≤ 10%, and allocation ≤ 100%.');settings=obj;persist('settings',settings);renderAnalysis();renderResearchAnswer();notify('Risk limits saved and trade scenarios recalculated')});
  $('apiForm').addEventListener('submit',async e=>{
@@ -348,6 +628,6 @@ function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEvent
  $('refreshData').onclick=()=>{if(!gatewayBase){if(hosted){gatewayBase=defaultGateway;persist('gatewayBase',gatewayBase);}else{setPage('settings');notify('Enter your gateway URL and access code, then Save & test gateway.');return;}}demoMode=false;persist('demoMode',false);fetchOrDemo();};
  const canvas=$('priceCanvas');canvas.addEventListener('mousemove',e=>{const meta=canvas.__chartMeta;if(!meta)return;const rect=canvas.getBoundingClientRect(),x=e.clientX-rect.left,index=meta.start+Math.floor((x-meta.padLeft)/meta.ww*meta.n);if(index<meta.start||index>=currentAnalysis.candles.length){$('chartTooltip').classList.add('hidden');return}hoverIndex=index;const c=currentAnalysis.candles[index];$('chartTooltip').innerHTML=`<strong>${htmlEscape(exchangeTimestamp(c.time,false))}</strong><br>O ${money(c.open)} &nbsp; H ${money(c.high)}<br>L ${money(c.low)} &nbsp; C ${money(c.close)}<br>Vol ${fmt(c.volume,0)}`;$('chartTooltip').style.left=Math.max(10,Math.min(rect.width-178,x+13))+'px';$('chartTooltip').classList.remove('hidden');drawChart()});canvas.addEventListener('mouseleave',()=>{hoverIndex=null;$('chartTooltip').classList.add('hidden');drawChart()});canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.min(candles.length,Math.max(25,zoom+(e.deltaY>0?12:-12)));drawChart()},{passive:false});window.addEventListener('resize',drawChart);
 }
-register();registerStrategy();$('tickerInput').value=symbol.symbol;if(demoMode)loadDemo(false);else fetchOrDemo();setInterval(()=>{$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT'},5000);$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT';
+register();registerStrategy();registerScreener();$('tickerInput').value=symbol.symbol;if(demoMode)loadDemo(false);else fetchOrDemo();setInterval(()=>{$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT'},5000);$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT';
 
 })();

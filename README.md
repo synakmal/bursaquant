@@ -1,6 +1,18 @@
-# BursaQuant — Stock Research Terminal (v0.4 trial)
+# BursaQuant — Stock Research Terminal (v0.5 trial)
 
 BursaQuant is a lightweight stock-research dashboard for US and Bursa Malaysia markets. It combines real OHLCV data with transparent technical rules, conditional entry/stop/TP scenarios and configurable position-risk calculations.
+
+## New in v0.5: a real daily screener
+
+Read [SCREENER-START-HERE.md](SCREENER-START-HERE.md) for the new screen. It replaces simulated screener rows with explicit real-data requests for your selected universe. It flags quiet accumulation candidates, price/volume breakout candidates, distribution pressure and unavailable evidence. The rules are transparent, unvalidated research checklists, not investor-flow measurements or probabilities of a future price surge.
+
+- Choose pasted/imported ticker lists, your watchlist or a market directory. US directories come from Nasdaq Trader; the Bursa directory requires a separate server-side iSaham token and discloses unverified completeness.
+- Scan completed daily candles sequentially in batches of 1–25, with explicit continuation and rate-limit pauses. Loading a directory does not scan it.
+- Review CMF20, directional-volume pressure, range/volatility contraction, prior resistance and configurable liquidity floors in each finding.
+- See selected/checked/analysed/failed/insufficient/stale counts and original candle/fetch timestamps. No simulated fallback is used.
+- Keep results locally, resume a compatible run and export evidence. The screen is on demand; it is not a continuously running or guaranteed full-market service. Browser storage capacity and provider request access limit practical scale.
+
+The source release does not become the public production version until its reviewed change is merged and deployed. Vercel project `bursaquant` in `syn-db04` was verified connected to `synakmal/bursaquant` on 28 October 2026 using the repository-URL project filter. No new provider account or subscription was created for this update.
 
 ## Start the latest-data trial
 
@@ -19,7 +31,7 @@ Open **Strategy & Learning** in the sidebar. No API registration is needed to tr
 - Start with Balanced, Trend, Pullback or Breakout emphasis; edit and save a custom name.
 - Enable individual rating inputs and set relative weights: moving-average trend, RSI, MACD, support/resistance, relative volume, ATR volatility and Bollinger-band location.
 - Adjust the preferred RSI band and the constructive/caution score thresholds.
-- Ratings, the demo screener, local answers and exported AI context use the saved rules. Research snapshots retain the strategy used when saved.
+- Single-stock ratings, local answers and exported AI context use the saved rules. Research snapshots retain the strategy used when saved. The daily accumulation screener has a separate, disclosed checklist and thresholds.
 - Read an expandable guide for each indicator, including its calculation, use in this app and limitations.
 - Ask the local explainer about the score, confirmation conditions, risk sizing or missing evidence.
 - Export an AI research brief containing the selected strategy, measured evidence, data source, coverage and risk settings. This creates a local file; it does not contact an AI service.
@@ -30,7 +42,9 @@ Indicator periods remain SMA20/50/200, RSI14, MACD12/26/9, ATR14, Bollinger20/2 
 
 The original v0.1 and v0.2 ZIP extracts are preserved in the workspace's `versions/` directory. This `bursaquant/` directory is the active source. Upload its contents to the repository root when publishing, not the surrounding workspace or archives. Keep personal journal exports and research briefs outside the repository.
 
-## What changed in v0.2
+## Historical v0.2 integrations
+
+The sections below describe optional earlier providers; the Yahoo trial and v0.5 guide above describe the active path. iSaham chart entitlement and Twelve Data credentials are not required for pasted-list Yahoo scans.
 
 - Added a **server-side market-data gateway** under `api/` for Vercel.
 - Added **Twelve Data** integration for US 1H, 4H, 1D and 1W candles.
@@ -67,7 +81,7 @@ The gateway requests US stock/ETF OHLCV data from Twelve Data. The current Twelv
 
 The gateway uses iSaham API for Bursa search and chart history. As checked on 27 October 2026, Free includes 500 credits/month for eligible endpoints, but the chart endpoint requires **Basic+** entitlement and documents D/W/M resolutions. The existing adapter requests daily and weekly history; it does not provide Bursa intraday candles. Stored quotes have no guaranteed update interval or provider delay. An API response timestamp is not proof of quote freshness. See [iSaham documentation](https://api.isaham.my/docs) and [pricing](https://api.isaham.my/pricing).
 
-For Bursa 1H/4H research, use the existing CSV importer until a provider with suitable intraday rights is selected.
+The iSaham adapter supplies daily/weekly candles only. The Yahoo trial offers intraday intervals with the limitations described above; neither provider guarantees full coverage or unrestricted request rights.
 
 ## Deploy the gateway
 
@@ -128,8 +142,8 @@ The score is a rules-based research summary, not a probability forecast or guara
 
 ## Current limitations
 
-1. Bursa live 1H/4H requires a future intraday provider; v0.2 will not fabricate it.
-2. The screener is still a demonstration-universe scanner, not a full-market real-time scanner.
+1. Intraday history and current-candle completion are provider-dependent. Yahoo is unofficial, delayed data may apply, and its request access is not unlimited or guaranteed.
+2. The screener now uses real daily candles for explicitly checked symbols, but full-market automatic refresh, durable shared result storage and complete verified Bursa instrument coverage remain future work.
 3. Fundamentals, news sentiment, broader-index regime and sector relative strength are not yet wired into the final score.
 4. Structured warrants still require a separate derivative model: underlying, expiry, exercise price, conversion ratio, premium, gearing, time decay and liquidity.
 5. Provider quotas and display/redistribution permissions can change.

@@ -13,7 +13,8 @@ process.env.BQ_DATA_PROVIDER ||= 'yahoo';
 const {default:market}=await import('../api/market.js');
 const {default:search}=await import('../api/search.js');
 const {default:health}=await import('../api/health.js');
-const handlers={'/api/market':market,'/api/search':search,'/api/health':health};
+const {default:universe}=await import('../api/universe.js');
+const handlers={'/api/market':market,'/api/search':search,'/api/health':health,'/api/universe':universe};
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.csv':'text/csv; charset=utf-8'};
 const port=Number(process.env.BQ_LOCAL_PORT||8000);
 const server=http.createServer(async(req,res)=>{
