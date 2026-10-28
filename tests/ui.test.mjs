@@ -45,7 +45,7 @@ function boot(saved={},options={}){
   }
   const elements=parse(page);
   const document={getElementById:id=>byId.get(id)||null,querySelectorAll:s=>elements.filter(e=>matches(e,s)),addEventListener(){},createElement:tag=>new Element(tag),body:{append(){}}};
-  const context=vm.createContext({document,window:{location:{protocol:options.protocol||''},addEventListener(){},scrollTo(){}},localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,String(v))},requestAnimationFrame:fn=>fn(),setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,Blob,URL:{createObjectURL:blob=>{const key='blob:'+downloads.length;downloads.push({blob,url:key});return key;},revokeObjectURL(){}},fetch:options.fetch||(()=>{throw new Error('Unexpected network request in offline UI test');})});
+  const context=vm.createContext({document,window:{location:{protocol:options.protocol||'',hostname:options.hostname||''},addEventListener(){},scrollTo(){}},localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,String(v))},requestAnimationFrame:fn=>fn(),setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,Blob,URL:{createObjectURL:blob=>{const key='blob:'+downloads.length;downloads.push({blob,url:key});return key;},revokeObjectURL(){}},fetch:options.fetch||(()=>{throw new Error('Unexpected network request in offline UI test');})});
   vm.runInContext(bundle,context,{filename:'src/bundle.js'});
   return {get:id=>byId.get(id),all:s=>document.querySelectorAll(s),storage,downloads};
 }
@@ -64,6 +64,16 @@ function configure(ui,{name='RSI only',rsiLow=0,rsiHigh=100,enabled={rsi:100}}={
     weight.disabled=!box.checked;weight.value=enabled[box.dataset.enable]??10;
   }
 }
+
+test('GitHub Pages uses the production gateway while Vercel keeps same-origin API requests',async()=>{
+  for(const [hostname,prefix]of [['synakmal.github.io','https://bursaquant-syn-db04.vercel.app/api'],['bursaquant-syn-db04.vercel.app','/api']]){
+    const requests=[];const ui=boot({}, {protocol:'https:',hostname,fetch:async(url)=>{requests.push(url);return response(providerData());}});
+    await settle();
+    assert.ok(requests[0].startsWith(prefix+'/market?'));
+    assert.equal(ui.get('sourceLabel').textContent,'YAHOO FINANCE');
+    assert.notEqual(ui.get('scoreNumber').textContent,'—');
+  }
+});
 
 test('bundled dashboard boots offline and includes educational indicator explanations',()=>{
   const ui=boot();assert.equal(ui.get('sourceLabel').textContent,'SIMULATED DEMO');

@@ -20,7 +20,8 @@ const persist=(key,val)=>{try{localStorage.setItem('bq_'+key,JSON.stringify(val)
 let settings={...DEFAULT_SETTINGS,...load('settings',{})};let watchlist=load('watchlist',[]),snapshots=load('snapshots',[]),trades=load('trades',[]);
 let symbol=instruments[0],timeframe='1day',style='swing',candles=[],source='SIMULATED DEMO',sourceAt='',currentAnalysis=null,zoom=85,hoverIndex=null,toastTimer=null;
 const hosted=/^https?:$/.test(window.location?.protocol||'');
-let gatewayBase=load('gatewayBase',hosted?'/api':'');
+const defaultGateway=hosted?(window.location?.hostname==='synakmal.github.io'?'https://bursaquant-syn-db04.vercel.app/api':'/api'):'';
+let gatewayBase=load('gatewayBase',defaultGateway);
 let dataProvider=load('dataProvider','auto'),demoMode=load('demoMode',!gatewayBase),gatewayAccessCode=load('gatewayAccessCode','');
 if(!['auto','yahoo','twelvedata','isaham'].includes(dataProvider))dataProvider='auto';
 let requestSeq=0,activeDataKey='',dataError='';
@@ -203,7 +204,7 @@ function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEvent
  $('apiForm').addEventListener('submit',async e=>{
   e.preventDefault();const input=$('gatewayUrl').value.trim().replace(/\/$/,'');
   if(input&&input!=='/api'){try{const u=new URL(input);if(!['http:','https:'].includes(u.protocol))throw Error();}catch{return notify('Use an HTTPS gateway URL ending in /api, or /api for this site.');}}
-  gatewayBase=input||(hosted?'/api':'');dataProvider=$('dataProvider').value;gatewayAccessCode=$('gatewayAccessCode').value.trim();
+  gatewayBase=input||defaultGateway;dataProvider=$('dataProvider').value;gatewayAccessCode=$('gatewayAccessCode').value.trim();
   persist('gatewayBase',gatewayBase);persist('dataProvider',dataProvider);persist('gatewayAccessCode',gatewayAccessCode);demoMode=false;persist('demoMode',false);requestSeq++;
   if(!gatewayBase){clearAnalysis('Enter the deployed gateway URL, or choose Load Demo.');return;}
   try{const h=await gatewayFetch('/health');if(h.status!=='ok')throw Error('Gateway responded but is not ready.');notify('Gateway connected. Requesting the latest available candles…');await fetchOrDemo();}
@@ -211,7 +212,7 @@ function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEvent
  });
  $('clearGateway').onclick=()=>{gatewayBase='';$('gatewayUrl').value='';persist('gatewayBase','');loadDemo();notify('Demo mode selected. Refresh Data reconnects to the gateway.')};
  $('loadDemo').onclick=()=>loadDemo();
- $('refreshData').onclick=()=>{if(!gatewayBase){if(hosted){gatewayBase='/api';persist('gatewayBase',gatewayBase);}else{setPage('settings');notify('Enter your gateway URL and access code, then Save & test gateway.');return;}}demoMode=false;persist('demoMode',false);fetchOrDemo();};
+ $('refreshData').onclick=()=>{if(!gatewayBase){if(hosted){gatewayBase=defaultGateway;persist('gatewayBase',gatewayBase);}else{setPage('settings');notify('Enter your gateway URL and access code, then Save & test gateway.');return;}}demoMode=false;persist('demoMode',false);fetchOrDemo();};
  const canvas=$('priceCanvas');canvas.addEventListener('mousemove',e=>{const meta=canvas.__chartMeta;if(!meta)return;const rect=canvas.getBoundingClientRect(),x=e.clientX-rect.left,index=meta.start+Math.floor((x-meta.padLeft)/meta.ww*meta.n);if(index<meta.start||index>=currentAnalysis.candles.length){$('chartTooltip').classList.add('hidden');return}hoverIndex=index;const c=currentAnalysis.candles[index];$('chartTooltip').innerHTML=`<strong>${htmlEscape(exchangeTimestamp(c.time,false))}</strong><br>O ${money(c.open)} &nbsp; H ${money(c.high)}<br>L ${money(c.low)} &nbsp; C ${money(c.close)}<br>Vol ${fmt(c.volume,0)}`;$('chartTooltip').style.left=Math.max(10,Math.min(rect.width-178,x+13))+'px';$('chartTooltip').classList.remove('hidden');drawChart()});canvas.addEventListener('mouseleave',()=>{hoverIndex=null;$('chartTooltip').classList.add('hidden');drawChart()});canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.min(candles.length,Math.max(25,zoom+(e.deltaY>0?12:-12)));drawChart()},{passive:false});window.addEventListener('resize',drawChart);
 }
 register();registerStrategy();$('tickerInput').value=symbol.symbol;if(demoMode)loadDemo(false);else fetchOrDemo();setInterval(()=>{$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT'},5000);$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT';

@@ -4,6 +4,8 @@ BursaQuant is a lightweight stock-research dashboard for US and Bursa Malaysia m
 
 ## Start the latest-data trial
 
+Published frontend: https://synakmal.github.io/bursaquant/ . On that GitHub Pages origin the app defaults to the production gateway at https://bursaquant-syn-db04.vercel.app/api . Enter your personal access code in **Risk & Data Settings** once per browser/site; the code is never included in this repository. Vercel-hosted copies continue using their same-origin `/api` routes. A daily chart uses completed sessions; use 15m/30m for available current-session candles.
+
 Read [TRIAL-START-HERE.md](TRIAL-START-HERE.md) for the step-by-step local and GitHub/Vercel setup. `npm start` runs a personal server on http://127.0.0.1:8000 with the Yahoo trial adapter enabled. No dependency installation or provider API key is required for this local adapter. Yahoo is unofficial and request access is not unlimited or guaranteed; review its data-use terms. Hosted Yahoo requests require a private `BQ_ACCESS_TOKEN`, entered in the app's data settings.
 
 v0.4 adds on-demand company search and historical candle analysis through Yahoo, explicit provider/error states, source and retrieval timestamps, inference/caching disclosures, request-race protection and all nine timeframe choices. Provider errors never silently replace a real-data analysis with synthetic prices. The source directory remains connected to the selected GitHub repository through its review branch.

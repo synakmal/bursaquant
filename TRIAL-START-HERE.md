@@ -23,6 +23,8 @@ The explainer is rules-based; a generative AI service, fundamentals and news are
 
 ## Put the trial online while keeping GitHub
 
+The release frontend is https://synakmal.github.io/bursaquant/ and its production gateway is https://bursaquant-syn-db04.vercel.app/api . The app selects that gateway automatically on your GitHub Pages domain. Production uses a separate personal access code from the preview; keep it in Vercel environment settings and your browser's data settings, never in GitHub. The local release copy is saved under the ignored `.local/production-access-code.txt` file.
+
 1. Add Vercel and sign in with GitHub. Its Hobby plan is intended for personal, non-commercial use.
 2. Use the tested trial branch of `synakmal/bursaquant`. Import that repository, or select the review branch when creating a preview. Do not deploy the older main branch before the trial changes are merged.
 3. Use Framework Preset **Other**, Build Command **npm run build**, and the repository root as the source. Output Directory can be `.` for this static frontend; the `api/` directory contains Vercel functions.
