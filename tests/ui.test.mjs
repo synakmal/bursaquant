@@ -213,3 +213,43 @@ test('legacy provider timestamps do not claim confirmed completed candles',async
   assert.match(ui.get('dataTimestamp').textContent,/^Last supplied candle:/);assert.doesNotMatch(ui.get('dataTimestamp').textContent,/completed candle/);
   assert.match(ui.get('providerDetails').textContent,/has not confirmed/);assert.match(ui.get('researchAnswer').textContent,/completion has not been confirmed/);
 });
+
+function recentScreenData(){
+  const data=providerData(),last=Math.floor(Date.now()/1000)-86400;
+  data.bars=data.bars.map((bar,index)=>({...bar,time:last-(data.bars.length-index-1)*86400}));
+  data.meta.fetchedAt=new Date().toISOString();return data;
+}
+
+test('real screener starts empty, fetches the selected daily symbol and persists its evidence without the access code',async()=>{
+  const calls=[],code='screen-private-code';
+  const ui=boot({bq_gatewayAccessCode:JSON.stringify(code)}, {protocol:'https:',fetch:async(url,options)=>{calls.push({url,options});return response(recentScreenData());}});
+  await settle();assert.match(ui.get('screenResults').innerHTML,/No simulated results/);assert.doesNotMatch(ui.get('screenResults').innerHTML,/Apple|Maybank|SIMULATED/);
+  ui.get('screenSymbols').value='1155';ui.get('screenBatch').value='1';await ui.get('runScreen').dispatch('click');
+  assert.equal(calls.length,2);assert.match(calls[1].url,/symbol=1155/);assert.match(calls[1].url,/interval=1day/);assert.match(calls[1].url,/limit=250/);assert.equal(calls[1].options.headers['X-BQ-Access-Token'],code);
+  assert.match(ui.get('screenResults').innerHTML,/1155/);assert.match(ui.get('screenResults').innerHTML,/yahoo/);assert.match(ui.get('screenResults').innerHTML,/View checks/);
+  assert.equal(ui.get('continueScreen').disabled,true);assert.equal(ui.get('exportScreen').disabled,false);
+  const run=JSON.parse(ui.storage.get('bq_screenRun'));assert.equal(run.results.length,1);assert.equal(run.results[0].instrument.market,'MY');assert.doesNotMatch(JSON.stringify(run),/screen-private-code|gatewayAccessCode/);
+  await ui.get('exportScreen').dispatch('click');const exported=await ui.downloads.find(x=>x.blob).blob.text();assert.match(exported,/accumulation-v1/);assert.doesNotMatch(exported,/screen-private-code|gatewayAccessCode/);
+  const reloaded=boot(Object.fromEntries(ui.storage));assert.match(reloaded.get('screenResults').innerHTML,/1155/);assert.match(reloaded.get('screenProgress').textContent,/1 of 1 checked/);
+});
+
+test('real HTTP 429 pauses the screener immediately and never fabricates remaining rows',async()=>{
+  let calls=0;const ui=boot({}, {protocol:'https:',fetch:async()=>++calls===1?response(recentScreenData()):response({error:{code:'YAHOO_RATE_LIMITED',message:'Provider requested a pause'}},429)});
+  await settle();ui.get('screenSymbols').value='1155,1023';ui.get('screenBatch').value='2';await ui.get('runScreen').dispatch('click');
+  assert.equal(calls,2);assert.match(ui.get('screenProgress').textContent,/1 of 2 checked/);assert.match(ui.get('screenProgress').textContent,/rate limit/);assert.equal(ui.get('continueScreen').disabled,false);
+  assert.match(ui.get('screenResults').innerHTML,/Provider requested a pause/);assert.doesNotMatch(ui.get('screenResults').innerHTML,/1023|SIMULATED/);
+});
+
+test('directory loading does not start a price scan and a checklist edit invalidates resume',async()=>{
+  const calls=[];const ui=boot({}, {protocol:'https:',fetch:async url=>{calls.push(url);const daily=recentScreenData();daily.meta.name='Apple <test>';return response(url.includes('/universe?')?{instruments:[{symbol:'AAPL',name:'Apple <test>',market:'US',type:'Stock'},{symbol:'MSFT',market:'US',type:'Stock'}],meta:{market:'US',provider:'nasdaq-trader',fetchedAt:'2026-10-28T10:00:00Z',coverage:'Two directory files loaded.'}}:daily);}});
+  await settle();ui.get('screenMarket').value='US';await ui.get('loadScreenDirectory').dispatch('click');
+  assert.equal(calls.length,2);assert.match(calls[1],/universe\?market=US/);assert.equal(ui.get('screenUniverse').value,'directory');assert.match(ui.get('screenDirectoryStatus').textContent,/2 eligible instruments loaded/);assert.match(ui.get('screenProgress').textContent,/No scan started/);
+  ui.get('screenBatch').value='1';await ui.get('runScreen').dispatch('click');assert.equal(calls.length,3);assert.equal(ui.get('continueScreen').disabled,false);
+  assert.match(ui.get('screenResults').innerHTML,/Apple &lt;test&gt;/);ui.get('screenCmf').value='0.1';await ui.get('screenCmf').dispatch('change');assert.equal(ui.get('continueScreen').disabled,true);
+  assert.match(ui.get('screenProgress').textContent,/settings changed/);
+});
+
+test('missing Bursa directory credentials leave custom-list scanning available',async()=>{
+  const ui=boot({}, {protocol:'https:',fetch:async url=>url.includes('/universe?')?response({error:{message:'Set ISAHAM_API_TOKEN for the Bursa directory'}},503):response(recentScreenData())});
+  await settle();await ui.get('loadScreenDirectory').dispatch('click');assert.match(ui.get('screenDirectoryStatus').textContent,/ISAHAM_API_TOKEN/);assert.equal(ui.get('screenUniverse').value,'custom');assert.equal(ui.get('runScreen').disabled,false);assert.equal(ui.get('screenSymbols').disabled,false);
+});
