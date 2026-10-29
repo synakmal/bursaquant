@@ -12,7 +12,11 @@ Read [SCREENER-START-HERE.md](SCREENER-START-HERE.md) for the new screen. It rep
 - See selected/checked/analysed/failed/insufficient/stale counts and original candle/fetch timestamps. No simulated fallback is used.
 - Keep results locally, resume a compatible run and export evidence. The screen is on demand; it is not a continuously running or guaranteed full-market service. Browser storage capacity and provider request access limit practical scale.
 
-The source release does not become the public production version until its reviewed change is merged and deployed. Vercel project `bursaquant` in `syn-db04` was verified connected to `synakmal/bursaquant` on 28 October 2026 using the repository-URL project filter. No new provider account or subscription was created for this update.
+v0.5 was published through PR #2 at commit `3689577`; both GitHub Pages and Vercel production deployed it. Vercel project `bursaquant` in `syn-db04` is connected to `synakmal/bursaquant`. The project covers stocks and ETFs; warrants are outside the current scope.
+
+### Private provider connection check
+
+v0.5.1 adds `GET /api/provider-status?provider=isaham`, protected by the existing personal gateway access code. It checks the documented zero-credit iSaham account-usage endpoint server-side, reports non-sensitive token-format issues and sanitised provider/access errors, and returns only tier/credit totals on a recognised success. It never returns the token, raw upstream response, account identifier or IP address. Configuration booleans in `/api/health` establish only that a setting exists; they do not establish that the provider accepted it. The connection check is explicit and does not run during every scan.
 
 ## Start the latest-data trial
 
