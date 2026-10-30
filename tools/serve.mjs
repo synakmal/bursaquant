@@ -15,7 +15,8 @@ const {default:search}=await import('../api/search.js');
 const {default:health}=await import('../api/health.js');
 const {default:universe}=await import('../api/universe.js');
 const {default:providerStatus}=await import('../api/provider-status.js');
-const handlers={'/api/market':market,'/api/search':search,'/api/health':health,'/api/universe':universe,'/api/provider-status':providerStatus};
+const {default:research}=await import('../api/research.js');
+const handlers={'/api/market':market,'/api/search':search,'/api/health':health,'/api/universe':universe,'/api/provider-status':providerStatus,'/api/research':research};
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.csv':'text/csv; charset=utf-8'};
 const port=Number(process.env.BQ_LOCAL_PORT||8000);
 const server=http.createServer(async(req,res)=>{
