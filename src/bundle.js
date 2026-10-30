@@ -327,8 +327,494 @@ async function scanDailyBatch(run,{request,evaluate,onUpdate=()=>{},shouldStop=(
 
 return {screenInstrument,parseScreenSymbols,parseScreenListFile,createScreenRun,screenCoverage,usableDailyBars,scanDailyBatch};
 })();
+const BQDeepAnalysis=(()=>{
+/**
+ * A compact research report over independently fetched, completed provider bars.
+ * No network calls, predictions or new indicator calculations occur here.
+ *
+ * buildDeepReport({symbol, market, frames, generatedAt, mode, strategy})
+ * frames: [{timeframe:'1day'|'4h'|'1h', bars, meta, analysis, error?,
+ *           accumulation?, sizedPlans?}]. `analysis` comes from analyse(bars).
+ * Optional daily `accumulation` comes from evaluateAccumulation(bars); optional
+ * `sizedPlans` are sizePosition results (or {position: result}) in analysis.plans order. They are never
+ * inferred when absent. The caller must render all returned text as plain text.
+ */
+const DEEP_TIMEFRAMES=['1day','4h','1h'];
+const DEEP_FRAME_NAMES={'1day':'Daily','4h':'4H','1h':'1H'};
+const DEEP_PROVIDERS=['yahoo','twelvedata','isaham'];
+const deepNumber=value=>typeof value==='number'&&Number.isFinite(value);
+const deepRound=value=>deepNumber(value)?Number(value.toFixed(6)):null;
+const deepText=(value,limit=300)=>typeof value==='string'?value.slice(0,limit):'';
+const deepLast=values=>Array.isArray(values)?values.at(-1):null;
+const deepIso=seconds=>deepNumber(seconds)&&Math.abs(seconds)<8640000000000?new Date(seconds*1000).toISOString():null;
+
+function deepPlan(plan,sized){
+  if(!plan||plan.valid!==true||!['entry','stop','tp1','tp2','tp3'].every(key=>deepNumber(plan[key]))||plan.stop<0||plan.entry<=plan.stop||plan.tp1<=plan.entry||plan.tp2<=plan.tp1||plan.tp3<=plan.tp2)return null;
+  const result={id:deepText(plan.id,30),label:deepText(plan.label,80),entry:deepRound(plan.entry),stop:deepRound(plan.stop),targets:[plan.tp1,plan.tp2,plan.tp3].map(deepRound),conditions:deepText(plan.conditions,600),description:deepText(plan.description,400),riskPerShare:deepRound(plan.entry-plan.stop),grossRewardRisk:[plan.tp1,plan.tp2,plan.tp3].map(price=>deepRound((price-plan.entry)/(plan.entry-plan.stop))),sizing:null};
+  // Results already include user settings, commissions, FX and lot constraints.
+  // Never fabricate a position quantity from an absent or malformed size model.
+  if(sized&&deepNumber(sized.qty)&&Number.isInteger(sized.qty)&&sized.qty>=0&&['riskLimit','budget','estimatedLoss','cost'].every(key=>deepNumber(sized[key])&&sized[key]>=0))result.sizing={qty:sized.qty,riskLimit:deepRound(sized.riskLimit),budget:deepRound(sized.budget),estimatedLoss:deepRound(sized.estimatedLoss),cost:deepRound(sized.cost),netRewardRisk:[sized.rr1,sized.rr2].map(deepRound),message:deepText(sized.message,350)};
+  return result;
+}
+
+function deepAccumulation(value){
+  if(!value||!['accumulation','breakout','distribution','none','insufficient'].includes(value.classification))return null;
+  const metrics={};
+  for(const key of ['cmf20','obvPressure','rvol','rangePct','rangeContraction','atrContraction','averageVolume','averageTurnover','priorResistance','distanceToResistancePct'])metrics[key]=deepRound(value.metrics?.[key]);
+  return {classification:value.classification,status:deepText(value.status,100),score:deepNumber(value.score)&&value.score>=0&&value.score<=100?value.score:null,metrics,conditions:(Array.isArray(value.conditions)?value.conditions:[]).slice(0,15).map(condition=>({id:deepText(condition.id,40),label:deepText(condition.label,100),met:typeof condition.met==='boolean'?condition.met:null,reason:deepText(condition.reason,350),rule:deepText(condition.rule,350)})),warnings:['Price/volume pressure cannot identify buyers or sellers, establish institutional intent, or prove accumulation.','The checklist has not been backtested and is not a probability of profit.']};
+}
+
+function deepFrame(input,timeframe,nowSeconds){
+  const base={timeframe,label:DEEP_FRAME_NAMES[timeframe],status:'unavailable',reason:'This timeframe has not been loaded.',provider:null,timezone:null,fetchedAt:null,lastCandle:null,completedCandles:false,completionInferred:false,ageDays:null,barsUsed:0,trend:null,score:null,verdict:null,price:null,indicators:null,levels:null,coverage:null,supporting:[],contrary:[],observations:[],warnings:[],evidence:[],plans:[],accumulation:null};
+  if(!input)return base;
+  const invalid=(status,reason)=>({...base,status,reason});
+  if(input.error)return invalid('error',deepText(typeof input.error==='string'?input.error:input.error.message,350)||'Market-data request failed.');
+  const {meta,bars,analysis}=input;
+  if(!meta||!DEEP_PROVIDERS.includes(meta.provider))return invalid('unverified','A recognised provider source is required. Demo and unverified CSV data are excluded.');
+  base.provider=meta.provider;base.timezone=deepText(meta.timezone,80)||null;base.fetchedAt=deepText(meta.fetchedAt,60)||null;
+  if(meta.interval!==timeframe)return invalid('invalid','The provider interval does not match this report timeframe.');
+  if(meta.completedCandles!==true)return invalid('incomplete','The gateway cannot establish completed candles for this timeframe.');
+  base.completedCandles=true;base.completionInferred=meta.completionInferred===true;
+  if(meta.instrumentType&&!['EQUITY','ETF'].includes(String(meta.instrumentType).toUpperCase()))return invalid('unsupported','This instrument is not an eligible stock or ETF.');
+  if(!Array.isArray(bars)||bars.length<55)return invalid('insufficient','At least 55 completed candles are required for technical analysis.');
+  base.barsUsed=bars.length;
+  let previous=0;
+  for(const bar of bars){
+    if(!bar||!['time','open','high','low','close'].every(key=>deepNumber(bar[key]))||bar.time<=previous||bar.time<=0||bar.open<=0||bar.close<=0||bar.low<=0||bar.high<bar.low||bar.high<Math.max(bar.open,bar.close)||bar.low>Math.min(bar.open,bar.close)||(bar.volume!==undefined&&(!deepNumber(bar.volume)||bar.volume<0)))return invalid('invalid','History contains invalid, unordered or duplicate candles.');
+    previous=bar.time;
+  }
+  const last=bars.at(-1);base.lastCandle=deepIso(last.time);base.ageDays=deepRound((nowSeconds-last.time)/86400);
+  if(!base.lastCandle||last.time>nowSeconds)return invalid('invalid','A candle timestamp is in the future or outside the supported date range.');
+  // A seven-calendar-day guard tolerates weekends without pretending to model
+  // exchange calendars. This is a stale-history limit, not a latest-trade claim.
+  if(nowSeconds-last.time>7*86400)return invalid('stale','The latest candle is older than seven calendar days. Refresh before using this report.');
+  if(!analysis||!deepNumber(analysis.price)||analysis.price!==last.close||!Array.isArray(analysis.candles)||analysis.candles.length!==bars.length||analysis.candles.some((bar,index)=>!bar||['time','open','high','low','close','volume'].some(key=>(bar[key]??null)!==(bars[index][key]??null))))return invalid('invalid','Technical calculations do not match the supplied provider history.');
+  if(!['Bullish','Bearish','Mixed / Range'].includes(analysis.trend)||!deepNumber(deepLast(analysis.sma20))||!deepNumber(deepLast(analysis.sma50))||!analysis.ratingCoverage||!deepNumber(analysis.ratingCoverage.availableWeight)||!deepNumber(analysis.ratingCoverage.selectedWeight))return invalid('insufficient','The technical calculation is missing required trend or rating coverage.');
+  base.status='available';base.reason='Completed provider candles passed source, interval, price and freshness checks.';
+  base.price=deepRound(analysis.price);base.trend=analysis.trend;base.score=deepNumber(analysis.score)&&analysis.score>=0&&analysis.score<=100?analysis.score:null;base.verdict=deepText(analysis.verdict,120);
+  base.indicators={sma20:deepRound(deepLast(analysis.sma20)),sma50:deepRound(deepLast(analysis.sma50)),sma200:deepRound(deepLast(analysis.sma200)),rsi14:deepRound(analysis.rsi),macdHistogram:deepRound(analysis.macd),rvol:deepRound(analysis.rvol),atr14:deepRound(analysis.atr),atrPct:analysis.price>0&&deepNumber(analysis.atr)?deepRound(analysis.atr/analysis.price*100):null};
+  const support=analysis.levels?.support,resistance=analysis.levels?.resistance;
+  base.levels={support:deepNumber(support)&&support>0?deepRound(support):null,resistance:deepNumber(resistance)&&resistance>0?deepRound(resistance):null};
+  base.coverage={availableWeight:analysis.ratingCoverage.availableWeight,selectedWeight:analysis.ratingCoverage.selectedWeight,sma200:base.indicators.sma200!==null,volume:analysis.hasVolume===true,fundamentals:false,news:false,benchmark:false};
+  if(analysis.trend==='Bullish')base.supporting.push('Close is above SMA20 and SMA20 is above SMA50.');
+  else if(analysis.trend==='Bearish')base.contrary.push('Close is below SMA20 and SMA20 is below SMA50.');
+  else base.observations.push('Price and short/medium moving averages show a mixed or ranging trend.');
+  if(deepNumber(analysis.macd)){
+    if(analysis.macd>0)base.supporting.push('MACD histogram is positive; momentum is above its signal line.');
+    else if(analysis.macd<0)base.contrary.push('MACD histogram is negative; momentum is below its signal line.');
+    else base.observations.push('MACD histogram is zero; no positive or negative histogram bias.');
+  }
+  if(base.indicators.sma200!==null){
+    if(analysis.price>deepLast(analysis.sma200))base.supporting.push('Close is above SMA200.');
+    else if(analysis.price<deepLast(analysis.sma200))base.contrary.push('Close is below SMA200.');
+    else base.observations.push('Close equals SMA200.');
+  }else base.warnings.push('SMA200 is unavailable; longer-term trend coverage is limited.');
+  const low=analysis.strategy?.rsiLow,high=analysis.strategy?.rsiHigh;
+  if(deepNumber(analysis.rsi)&&deepNumber(low)&&deepNumber(high))base.observations.push(`RSI14 is ${deepRound(analysis.rsi)}; your preferred band is ${low}–${high}. This band is a strategy preference.`);
+  if(analysis.hasVolume!==true)base.warnings.push('Usable volume is missing; volume confirmation is unavailable.');
+  else if(deepNumber(analysis.rvol))base.observations.push(`RVOL is ${deepRound(analysis.rvol)} times the preceding 20 positive-volume average. Volume alone does not establish buying direction.`);
+  if(analysis.ratingCoverage.availableWeight<analysis.ratingCoverage.selectedWeight)base.warnings.push('Some selected indicators are unavailable and excluded from the normalised rating.');
+  if(meta.completionInferred)base.warnings.push('Candle completion is inferred by the gateway and is not guaranteed by the provider.');
+  base.warnings.push('The latest candle is a completed historical bar, not a live trade. Stop fills and target prices are not guaranteed.');
+  base.plans=(Array.isArray(analysis.plans)?analysis.plans:[]).map((plan,index)=>deepPlan(plan,input.sizedPlans?.[index]?.position??input.sizedPlans?.[index])).filter(Boolean);
+  if(timeframe==='1day')base.accumulation=deepAccumulation(input.accumulation);
+  base.evidence=['supporting','contrary','observations'].flatMap(kind=>base[kind].map((text,index)=>({id:`${timeframe}:${kind}:${index+1}`,kind,text})));
+  return base;
+}
+
+/** Return a source-gated report; valid timeframes remain usable after partial failures. */
+function buildDeepReport({symbol='',market='',frames=[],generatedAt=new Date().toISOString(),mode='swing',strategy=null}={}){
+  const now=Date.parse(generatedAt);
+  if(!Number.isFinite(now))throw new Error('A valid report generation timestamp is required.');
+  const inputs=Array.isArray(frames)?frames:[];
+  const reports=DEEP_TIMEFRAMES.map(timeframe=>{
+    const matches=inputs.filter(frame=>frame?.timeframe===timeframe);
+    return deepFrame(matches.length>1?{error:'Duplicate timeframe inputs; this timeframe was excluded.'}:matches[0],timeframe,now/1000);
+  });
+  const usable=reports.filter(frame=>frame.status==='available'),up=usable.filter(frame=>frame.trend==='Bullish'),down=usable.filter(frame=>frame.trend==='Bearish'),mixed=usable.filter(frame=>frame.trend==='Mixed / Range');
+  let alignment='unavailable',summary='No verified timeframe is available. Load completed provider candles before drawing a technical conclusion.';
+  if(usable.length){
+    if(up.length&&down.length){alignment='conflicting';summary='Timeframes disagree: bullish and bearish trend evidence coexist. A higher-timeframe trend and a lower-timeframe entry may be out of step.';}
+    else if(usable.length<3){alignment='partial';summary='Only part of the daily / 4H / 1H picture is available. Do not describe the missing timeframes as confirming the thesis.';}
+    else if(up.length===3){alignment='bullish';summary='Daily, 4H and 1H all show a bullish moving-average trend. This alignment does not confirm an entry or establish expected returns.';}
+    else if(down.length===3){alignment='bearish';summary='Daily, 4H and 1H all show a bearish moving-average trend. A new long thesis would need evidence of a change in conditions.';}
+    else {alignment='mixed';summary='The available timeframes include mixed or ranging trend readings. Directional confirmation is incomplete.';}
+  }
+  const supporting=usable.flatMap(frame=>frame.supporting.map(text=>`${frame.label}: ${text}`));
+  const contrary=usable.flatMap(frame=>frame.contrary.map(text=>`${frame.label}: ${text}`));
+  const daily=reports.find(frame=>frame.timeframe==='1day');
+  if(daily.accumulation?.classification==='distribution')contrary.push('Daily: the configured price/volume checklist indicates distribution pressure; it does not identify investor intent.');
+  if(['accumulation','breakout'].includes(daily.accumulation?.classification))supporting.push(`Daily: ${daily.accumulation.status.toLowerCase()} under the configured checklist; this hypothesis is unvalidated.`);
+  const missingInputs=reports.filter(frame=>frame.status!=='available').map(frame=>`${frame.label}: ${frame.reason}`);
+  missingInputs.push('Financial statements, valuation, company announcements, news and sector/market benchmarks are not connected to this technical report.');
+  return {version:1,symbol:deepText(symbol&&typeof symbol==='object'?symbol.symbol:symbol,40),market:deepText(market,20),generatedAt:new Date(now).toISOString(),mode:deepText(mode,40),strategy:{name:deepText(typeof strategy==='string'?strategy:strategy?.name,80)||'Selected technical strategy'},status:usable.length===3?'complete':usable.length?'partial':'unavailable',alignment,summary,counts:{available:usable.length,total:3,bullish:up.length,bearish:down.length,mixed:mixed.length},frames:reports,evidence:usable.flatMap(frame=>frame.evidence),supporting,contrary,missingInputs,nextChecks:[!usable.length?'Load verified completed candles before assessing any technical scenario.':alignment==='conflicting'?'Resolve the timeframe conflict before treating a lower-timeframe move as confirmation.':'Check price reaction at the stated support or resistance before treating a conditional scenario as active.','Compare entry, stop and targets against fees, slippage, liquidity and your own risk settings.','Verify company announcements and upcoming events before making a decision.'],limitations:['Technical scores are weighted checklists, not probabilities, expected returns or evidence of a profitable strategy.','Freshness uses a seven-calendar-day limit, not a complete exchange holiday calendar. Candle timestamps identify bar starts.','These rules have not been backtested. Track paper decisions and realised results, including costs, to assess usefulness.']};
+}
+
+return {buildDeepReport};
+})();
+const BQResearchUI=(()=>{
+// Plain DOM research workspace. Network and calculation dependencies are injected.
+const researchEscape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+const researchNumber=(value,places=2)=>Number.isFinite(value)?value.toLocaleString('en-US',{maximumFractionDigits:places}):'Unavailable';
+
+/** Strip personal position sizes before an explicit AI request. */
+function researchAiContext(report){
+  const copy=JSON.parse(JSON.stringify(report));
+  copy.kind='stock';
+  for(const frame of copy.frames||[])for(const plan of frame.plans||[])delete plan.sizing;
+  return copy;
+}
+
+function mountResearchWorkspace(root,deps){
+  root.innerHTML=`<div class="card research-controls"><div class="card-title-row"><h3 id="deepSelection">Selected stock</h3><span class="badge badge-outline">Daily · 4H · 1H</span></div><p class="muted small">Choose a ticker in Stock Analysis, then build a report from three separate sets of provider candles. Requests run sequentially. Unavailable timeframes remain visible.</p><div class="row-buttons"><button id="runDeepResearch" class="btn primary">Build deep report →</button><button id="stopDeepResearch" class="btn ghost" disabled>Pause</button><button id="exportDeepResearch" class="btn secondary" disabled>↓ Export report</button></div><p id="deepProgress" class="research-status" role="status" aria-live="polite">No deep report built yet.</p></div><div id="deepReport"></div><div class="card space-top"><div class="card-title-row"><h3>AI Research Coach</h3><button id="checkResearchAI" class="btn sm ghost">Check AI setup</button></div><p id="researchAIStatus" class="muted small" role="status">AI is optional. Check the server setup before asking a question.</p><label class="research-question" for="researchQuestion">Ask about this report<textarea id="researchQuestion" rows="3" maxlength="1000" placeholder="What supports the long thesis, what contradicts it, and what confirmation is missing?"></textarea></label><div class="row-buttons research-prompts"><button class="btn sm ghost" data-research-prompt="Challenge the bullish thesis using the evidence. What would invalidate it?">Challenge my thesis</button><button class="btn sm ghost" data-research-prompt="Explain the timeframe conflicts and what confirmation remains missing.">Explain conflicts</button><button class="btn sm ghost" data-research-prompt="Explain the daily accumulation checklist, including contradictory and missing evidence.">Check accumulation</button></div><button id="askResearchAI" class="btn primary" disabled>Ask AI about this report</button><p class="disclaimer">Sends this report and your question to the configured AI provider only when you click Ask. Access codes, your journal and position-size settings are excluded. The AI has no live web or news access. It explains evidence; it cannot establish future profit.</p><div id="researchAIAnswer" class="research-answer" role="status" aria-live="polite">Build a report first. Paid AI calls remain disabled until you configure the server.</div></div>`;
+  const el=id=>document.getElementById(id);
+  let report=null,reportKey='',running=false,paused=false,sequence=0,aiReady=false,aiBusy=false,aiSequence=0,setupSequence=0,connectionKey='';
+  const key=()=>deps.getSelection().key;
+  const valid=()=>report&&reportKey===key()&&report.counts.available>0;
+  const money=(value,currency)=>`${researchEscape(currency)} ${researchNumber(value,value<1?4:2)}`;
+  const list=items=>(items||[]).length?`<ul>${items.map(item=>`<li>${researchEscape(item)}</li>`).join('')}</ul>`:'<p class="muted small">No qualifying evidence in this category.</p>';
+  function buttons(){el('runDeepResearch').disabled=running;el('stopDeepResearch').disabled=!running;el('exportDeepResearch').disabled=!report||reportKey!==key();el('askResearchAI').disabled=!valid()||!aiReady||aiBusy||running;}
+  function refresh(){
+    const selection=deps.getSelection();
+    const connection=selection.connectionKey||selection.key;
+    if(connectionKey!==connection){aiReady=false;setupSequence++;connectionKey=connection;el('researchAIStatus').textContent='Connection changed. Check AI setup for this gateway.';}
+    el('deepSelection').textContent=`${selection.symbol} · ${selection.market} · ${selection.name}`;
+    if(report&&reportKey!==key()){
+      el('deepReport').innerHTML='<div class="data-notice">Selection or research settings changed. Build a new report to use these settings.</div>';
+      el('deepProgress').textContent='Previous report is out of date for this selection.';
+      el('researchAIAnswer').textContent='Build a new report before asking about this selection.';
+      aiSequence++;
+    }
+    buttons();
+  }
+  function render(){
+    if(!report)return;
+    const currency=deps.getSelection().currency;
+    el('deepReport').innerHTML=`<div class="card space-top"><div class="card-title-row"><h3>${researchEscape(report.symbol)} · ${researchEscape(report.alignment)} alignment</h3><span class="badge">${report.counts.available}/3 timeframes</span></div><p class="research-summary">${researchEscape(report.summary)}</p><p class="muted small">Generated ${researchEscape(report.generatedAt)} · ${researchEscape(report.strategy.name)} · ${researchEscape(report.mode)} scenarios. Each timeframe uses its own last completed candle; these are not simultaneous quotes.</p></div><div class="research-frame-grid">${report.frames.map(frame=>{
+      if(frame.status!=='available')return `<div class="card research-frame"><h3>${researchEscape(frame.label)} · ${researchEscape(frame.status)}</h3><p>${researchEscape(frame.reason)}</p><p class="muted small">${researchEscape(frame.provider||'No provider history confirmed')}${frame.lastCandle?' · Last candle '+researchEscape(frame.lastCandle):''}</p></div>`;
+      return `<div class="card research-frame"><div class="card-title-row"><h3>${researchEscape(frame.label)}</h3><span class="badge badge-outline">${researchEscape(frame.trend)}</span></div><div class="research-frame-price">${money(frame.price,currency)}</div><p class="muted small">${researchEscape(frame.provider)} · ${frame.barsUsed} candles<br>Bar start: ${researchEscape(frame.lastCandle)}<br>Timezone: ${researchEscape(frame.timezone||'Not supplied')}<br>Fetched: ${researchEscape(frame.fetchedAt||'Not supplied')}<br>Completion ${frame.completionInferred?'inferred':'reported'} · Rating ${researchNumber(frame.score)}/100</p><div class="indicator-table">${[['RSI14',frame.indicators.rsi14],['RVOL',frame.indicators.rvol],['MACD histogram',frame.indicators.macdHistogram],['ATR %',frame.indicators.atrPct],['Support',frame.levels.support],['Resistance',frame.levels.resistance]].map(([name,value])=>`<div class="indicator-row"><span>${name}</span><strong>${researchNumber(value,4)}</strong></div>`).join('')}</div><h4>Measured evidence</h4>${list([...frame.supporting,...frame.contrary,...frame.observations])}<details><summary>Coverage and limitations</summary>${list(frame.warnings)}<p class="small">Selected indicator weight available: ${frame.coverage.availableWeight}/${frame.coverage.selectedWeight}.</p></details></div>`;
+    }).join('')}</div><div class="two-col"><div class="card"><h3>Supports the long thesis</h3>${list(report.supporting)}</div><div class="card"><h3>Challenges the long thesis</h3>${list(report.contrary)}</div></div>${renderAccumulation(report.frames.find(frame=>frame.timeframe==='1day'))}<div class="card space-top"><h3>Conditional scenarios by timeframe</h3><p class="muted small">Alternative plans, not simultaneous positions. Choose a timeframe and confirm its conditions. Target levels are model outputs, not forecasts.</p>${report.frames.filter(frame=>frame.status==='available').map(frame=>`<details class="research-plan"><summary>${researchEscape(frame.label)} · ${frame.plans.length} modelled scenarios</summary>${frame.plans.map(plan=>`<div class="scenario"><strong>${researchEscape(plan.label)}</strong><p>${researchEscape(plan.conditions)}</p><p>Entry ${money(plan.entry,currency)} · Stop ${money(plan.stop,currency)}<br>Targets ${plan.targets.map(target=>money(target,currency)).join(' / ')}<br>Gross reward/risk: ${plan.grossRewardRisk.map(value=>researchNumber(value)+'×').join(' / ')}</p>${plan.sizing?`<p>Maximum modelled units: ${researchNumber(plan.sizing.qty,0)} · Estimated loss including configured costs: ${money(plan.sizing.estimatedLoss,currency)}<br>Net TP1 / TP2 reward/risk: ${plan.sizing.netRewardRisk.map(value=>researchNumber(value)+'×').join(' / ')}<br>${researchEscape(plan.sizing.message)}</p>`:''}</div>`).join('')||'<p class="muted small">No valid scenario geometry available.</p>'}</details>`).join('')}</div><div class="two-col"><div class="card"><h3>Next checks</h3>${list(report.nextChecks)}</div><div class="card"><h3>Missing evidence</h3>${list(report.missingInputs)}</div></div><div class="card space-top"><h3>How to judge whether this helps</h3><p class="muted small">Record the thesis, trigger and invalidation before the outcome. Review realised results after fees and slippage in the Trading Journal. A high rating alone does not establish a profitable edge.</p>${list(report.limitations)}</div>`;
+    buttons();
+  }
+  function renderAccumulation(frame){
+    if(!frame?.accumulation)return '';
+    const value=frame.accumulation;
+    return `<div class="card space-top"><div class="card-title-row"><h3>Daily accumulation research</h3><span class="badge">${researchEscape(value.status)}</span></div><p class="muted small">Uses the daily screener's current checklist settings, separately from your rating strategy.</p><div class="indicator-table">${value.conditions.map(condition=>`<div class="indicator-row"><span>${researchEscape(condition.label)}<small class="research-rule">${researchEscape(condition.rule)}</small></span><strong>${condition.met===null?'Unavailable':condition.met?'Met':'Not met'}</strong></div>`).join('')}</div>${list(value.warnings)}</div>`;
+  }
+  async function run(){
+    if(running)return;
+    const selection=deps.getSelection(),startKey=selection.key,seq=++sequence;
+    if(!selection.canLoad){el('deepProgress').textContent=selection.unavailableReason;return;}
+    running=true;paused=false;report=null;aiSequence++;el('deepReport').innerHTML='';el('researchAIAnswer').textContent='Building new evidence. Previous AI answers have been cleared.';buttons();
+    const frames=[];
+    try{
+      for(const timeframe of ['1day','4h','1h']){
+        if(paused||startKey!==key()||seq!==sequence)break;
+        el('deepProgress').textContent=`Loading ${timeframe==='1day'?'daily':timeframe.toUpperCase()} candles for ${selection.symbol} (${frames.length+1}/3)…`;
+        try{
+          const data=await deps.fetchMarket(selection,timeframe);
+          if(startKey!==key()||seq!==sequence)break;
+          const bars=data.bars;
+          const analysis=deps.analyseFrame(bars,selection);
+          frames.push({timeframe,bars,meta:data.meta,analysis,accumulation:timeframe==='1day'?deps.evaluateDaily(bars,selection):null,sizedPlans:deps.sizePlans(analysis,selection)});
+        }catch(error){frames.push({timeframe,error:String(error.message||'Data request failed.').slice(0,350)});if(error.status===429){paused=true;el('deepProgress').textContent='Provider rate limit reached. Remaining requests have stopped.';}}
+        if(!paused&&frames.length<3)await new Promise(resolve=>setTimeout(resolve,1500));
+      }
+      if(startKey!==key()||seq!==sequence){el('deepProgress').textContent='Selection changed during loading. Build a report for the new selection.';return;}
+      report=deps.buildReport({symbol:selection.symbol,market:selection.market,frames,generatedAt:new Date().toISOString(),mode:selection.mode,strategy:selection.strategy});
+      reportKey=startKey;render();el('deepProgress').textContent=`${paused?'Paused. ':''}${report.counts.available}/3 timeframes passed the data checks. ${report.status==='complete'?'Report ready.':'Missing or rejected timeframes are shown below.'}`;
+    }catch(error){el('deepProgress').textContent='Report unavailable: '+error.message;}
+    finally{running=false;refresh();}
+  }
+  async function checkAI(){
+    refresh();const seq=++setupSequence,connection=connectionKey;
+    el('researchAIStatus').textContent='Checking the private AI endpoint…';el('checkResearchAI').disabled=true;
+    try{const state=await deps.getAIStatus();const selection=deps.getSelection();if(seq!==setupSequence||connection!==(selection.connectionKey||selection.key))return;aiReady=state.ready===true;el('researchAIStatus').textContent=state.message+(state.model?' Model: '+state.model+'.':'');}
+    catch(error){if(seq===setupSequence){aiReady=false;el('researchAIStatus').textContent='AI setup check failed: '+error.message;}}
+    finally{el('checkResearchAI').disabled=false;buttons();}
+  }
+  async function askAI(){
+    if(!valid()||!aiReady||aiBusy||running)return;
+    const question=el('researchQuestion').value.trim()||'Explain the supporting evidence, contrary evidence, missing inputs and conditions that would invalidate this thesis.';
+    if(question.length>1000)return;
+    const contextKey=key(),seq=++aiSequence;aiBusy=true;buttons();el('researchAIAnswer').textContent='Reviewing the supplied evidence…';
+    try{
+      const result=await deps.sendAI({question,context:researchAiContext(report)});
+      if(contextKey!==key()||seq!==aiSequence)return;
+      el('researchAIAnswer').textContent=result.answer+`\n\n${result.truncated?'Response reached the output limit and may be incomplete.\n':''}Model: ${result.model} · Generated ${result.generatedAt}\nScope: supplied report only; no live web, news or independent verification.`;
+    }catch(error){if(contextKey===key()&&seq===aiSequence)el('researchAIAnswer').textContent='AI unavailable: '+error.message;}
+    finally{aiBusy=false;buttons();}
+  }
+  el('runDeepResearch').onclick=run;el('stopDeepResearch').onclick=()=>{paused=true;el('stopDeepResearch').disabled=true;el('deepProgress').textContent='Pausing after the current request.';};
+  el('exportDeepResearch').onclick=()=>{if(report&&reportKey===key())deps.download('bursaquant-deep-report.json',JSON.stringify(report,null,2),'application/json');};
+  el('checkResearchAI').onclick=checkAI;el('askResearchAI').onclick=askAI;
+  root.querySelectorAll('[data-research-prompt]').forEach(button=>button.onclick=()=>{el('researchQuestion').value=button.dataset.researchPrompt;});
+  refresh();
+  return {run,refresh};
+}
+
+return {researchAiContext,mountResearchWorkspace};
+})();
+const BQIpo=(()=>{
+// IPO research is entered by the user from source documents; no live IPO feed.
+const IPO_STORAGE_KEY='bq_ipo_dossiers_v1';
+const IPO_MAX_RECORDS=50;
+const IPO_MAX_BYTES=1000000;
+const IPO_METRIC_FIELDS=['price','shares','revenue','profit','equity','debt','cash','operatingCashFlow'];
+const IPO_TEXT_FIELDS={name:160,sourceUrl:1800,sourceDate:10,periodEnd:10,pageRefs:400,sector:120,useOfProceeds:1800,concentration:1800,lockup:1800,risks:2400,thesis:2400,peerReason:500};
+const ipoEscape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const ipoNumber=value=>value===null||value===undefined||(typeof value==='string'&&!value.trim())?null:(typeof value==='number'||typeof value==='string')&&Number.isFinite(Number(value))?Number(value):NaN;
+const ipoDate=value=>!value||(/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value);
+const ipoFinite=value=>typeof value==='number'&&Number.isFinite(value);
+const ipoDivide=(a,b)=>ipoFinite(a)&&ipoFinite(b)&&b>0&&Number.isFinite(a/b)?a/b:null;
+const ipoMedian=values=>{const sorted=values.filter(ipoFinite).sort((a,b)=>a-b),middle=Math.floor(sorted.length/2);return sorted.length?(sorted.length%2?sorted[middle]:(sorted[middle-1]+sorted[middle])/2):null;};
+
+function safeIpoSourceUrl(value){
+  if(!String(value??'').trim())return '';
+  try{const url=new URL(String(value));return ['https:','http:'].includes(url.protocol)&&!url.username&&!url.password?url.href:null;}catch{return null;}
+}
+
+function ipoCleanEntity(input,peer=false){
+  if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('Each IPO or peer must be an object.');
+  const record={};
+  for(const [key,max]of Object.entries(IPO_TEXT_FIELDS)){
+    const raw=input[key]??'';
+    if(typeof raw!=='string'||raw.length>max)throw new Error(`${key} must be text with at most ${max} characters.`);
+    record[key]=raw.trim();
+  }
+  if(!record.name)throw new Error(peer?'Each peer needs a company name.':'Enter a company name.');
+  record.sourceUrl=safeIpoSourceUrl(record.sourceUrl);
+  if(record.sourceUrl===null)throw new Error('Source links must use http or https and cannot contain credentials.');
+  for(const field of ['sourceDate','periodEnd'])if(!ipoDate(record[field]))throw new Error(`${field} must be a valid date.`);
+  for(const [field,choices,fallback]of [['market',['MY','US'],'MY'],['currency',['MYR','USD'],'MYR'],['stage',['prelisting','listed'],'prelisting'],['sourceStatus',['unverified','draft','final'],'unverified'],['basis',['unconfirmed','audited','unaudited'],'unconfirmed']]){
+    const value=input[field]??fallback;if(!choices.includes(value))throw new Error(`Invalid ${field}.`);record[field]=value;
+  }
+  for(const field of [...IPO_METRIC_FIELDS,'primaryPct','secondaryPct']){
+    const value=ipoNumber(input[field]);
+    if(value!==null&&(!Number.isFinite(value)||Math.abs(value)>1e12))throw new Error(`${field} must be a finite number with absolute value at most 1 trillion.`);
+    if(value!==null&&['price','shares','revenue','debt','cash','primaryPct','secondaryPct'].includes(field)&&value<0)throw new Error(`${field} cannot be negative.`);
+    if(value!==null&&['price','shares'].includes(field)&&value<=0)throw new Error(`${field} must be greater than zero when supplied.`);
+    if(value!==null&&['primaryPct','secondaryPct'].includes(field)&&value>100)throw new Error('Offer percentages must be between 0 and 100.');
+    record[field]=value;
+  }
+  if(record.primaryPct!==null&&record.secondaryPct!==null&&Math.abs(record.primaryPct+record.secondaryPct-100)>0.01)throw new Error('Primary and secondary percentages must total 100 when both are supplied.');
+  record.comparable=input.comparable===true;
+  return record;
+}
+
+function validateIpoDossier(input){
+  const record=ipoCleanEntity(input);
+  const id=input.id??'';
+  if(typeof id!=='string'||(id&&!/^[a-zA-Z0-9_-]{1,80}$/.test(id)))throw new Error('Invalid IPO record ID.');
+  record.id=id;
+  record.schemaVersion=1;
+  if(input.schemaVersion!==undefined&&input.schemaVersion!==1)throw new Error('Unsupported IPO backup version.');
+  if(input.peers!==undefined&&!Array.isArray(input.peers))throw new Error('Peers must be an array.');
+  if((input.peers?.length||0)>10)throw new Error('Use at most 10 peers per IPO.');
+  record.peers=(input.peers||[]).map(peer=>ipoCleanEntity(peer,true));
+  return record;
+}
+
+function calculateIpoMetrics(input={}){
+  const n=Object.fromEntries(IPO_METRIC_FIELDS.map(field=>[field,ipoNumber(input[field])]));
+  const marketCap=ipoFinite(n.price)&&n.price>0&&ipoFinite(n.shares)&&n.shares>0&&Number.isFinite(n.price*n.shares)?n.price*n.shares:null;
+  const netDebt=ipoFinite(n.debt)&&n.debt>=0&&ipoFinite(n.cash)&&n.cash>=0?n.debt-n.cash:null;
+  const enterpriseValue=ipoFinite(marketCap)&&ipoFinite(netDebt)&&Number.isFinite(marketCap+netDebt)?marketCap+netDebt:null;
+  return {marketCap,eps:ipoDivide(n.profit,n.shares),pe:ipoDivide(marketCap,n.profit),ps:ipoDivide(marketCap,n.revenue),netDebt,enterpriseValue,
+    evRevenue:enterpriseValue!==null&&enterpriseValue>0?ipoDivide(enterpriseValue,n.revenue):null,
+    netMargin:ipoDivide(n.profit,n.revenue)===null?null:ipoDivide(n.profit,n.revenue)*100,
+    returnOnClosingEquity:ipoDivide(n.profit,n.equity)===null?null:ipoDivide(n.profit,n.equity)*100,
+    cashConversion:ipoDivide(n.operatingCashFlow,n.profit)===null?null:ipoDivide(n.operatingCashFlow,n.profit)*100,
+    peStatus:ipoFinite(n.profit)&&n.profit<=0?'N/M · non-positive profit':marketCap===null||!ipoFinite(n.profit)?'Missing inputs':'Available'};
+}
+
+function ipoSourceGaps(entity){
+  const gaps=[];
+  if(entity.sourceStatus!=='final')gaps.push('final/registered source not confirmed');
+  if(!safeIpoSourceUrl(entity.sourceUrl))gaps.push('source link missing');
+  if(!entity.sourceDate||!ipoDate(entity.sourceDate))gaps.push('source review date missing');
+  if(!entity.periodEnd||!ipoDate(entity.periodEnd))gaps.push('annual financial year-end missing');
+  if(entity.basis!=='audited')gaps.push('audited annual basis not confirmed');
+  return gaps;
+}
+
+function compareIpoPeers(dossier){
+  const subject=calculateIpoMetrics(dossier),subjectGaps=ipoSourceGaps(dossier);
+  const rows=(dossier.peers||[]).map(peer=>{
+    const reasons=ipoSourceGaps(peer);
+    if(!peer.comparable)reasons.push('business comparability not confirmed');
+    if(peer.currency!==dossier.currency)reasons.push('currency differs');
+    if(peer.periodEnd!==dossier.periodEnd)reasons.push('financial year-end differs');
+    if(subjectGaps.length)reasons.push('IPO source/basis incomplete');
+    return {name:peer.name,eligible:reasons.length===0,reasons,metrics:calculateIpoMetrics(peer)};
+  });
+  const metrics=['pe','ps','evRevenue','netMargin','returnOnClosingEquity'].map(key=>{
+    const values=rows.filter(row=>row.eligible).map(row=>row.metrics[key]).filter(ipoFinite);
+    const median=ipoMedian(values),value=subject[key];
+    return {key,value,median,count:values.length,differencePct:median!==null&&median>0&&ipoFinite(value)?(value/median-1)*100:null};
+  });
+  return {subject,subjectGaps,rows,metrics,eligiblePeers:rows.filter(row=>row.eligible).length};
+}
+
+function parseIpoImport(text){
+  if(typeof text!=='string'||text.length>IPO_MAX_BYTES||new TextEncoder().encode(text).length>IPO_MAX_BYTES)throw new Error('IPO backup exceeds 1 MB.');
+  let data;try{data=JSON.parse(text);}catch{throw new Error('Choose a valid IPO JSON backup.');}
+  if(!data||data.schemaVersion!==1||!Array.isArray(data.dossiers)||data.dossiers.length>IPO_MAX_RECORDS)throw new Error('Expected a version 1 IPO backup with at most 50 dossiers.');
+  const records=data.dossiers.map(validateIpoDossier),ids=records.map(record=>record.id).filter(Boolean);
+  if(new Set(ids).size!==ids.length)throw new Error('IPO backup has duplicate record IDs.');
+  return records;
+}
+
+const IPO_LABELS={price:'Offer / reference price · currency per share',shares:'Post-IPO diluted shares · millions',revenue:'Annual revenue · millions',profit:'Annual net profit attributable to owners · millions',equity:'Equity attributable to owners at year-end · millions',debt:'Debt at year-end · millions',cash:'Cash at year-end · millions',operatingCashFlow:'Annual operating cash flow · millions'};
+const IPO_NAMES={pe:'P/E',ps:'P/S',evRevenue:'EV / revenue',netMargin:'Net margin',returnOnClosingEquity:'Profit / closing equity'};
+const ipoFormat=(value,digits=2)=>ipoFinite(value)?new Intl.NumberFormat('en',{maximumFractionDigits:digits}).format(value):'Unavailable';
+const ipoLink=(url,label)=>safeIpoSourceUrl(url)?`<a href="${ipoEscape(safeIpoSourceUrl(url))}" target="_blank" rel="noopener noreferrer">${ipoEscape(label)}</a>`:'No source link';
+const ipoInput=(name,label,options={})=>`<label>${ipoEscape(label)}<input name="${name}" type="${options.type||'text'}" ${options.min!==undefined?`min="${options.min}"`:''} ${options.max!==undefined?`max="${options.max}"`:''} ${options.type==='number'?'step="any"':''} ${options.maxlength?`maxlength="${options.maxlength}"`:''} ${options.required?'required':''} /></label>`;
+
+function ipoEntityForm(peer=false){
+  return `<div class="ipo-fields">${ipoInput('name',peer?'Peer company':'IPO company',{required:true,maxlength:160})}<label>Market<select name="market"><option value="MY">Bursa Malaysia</option><option value="US">US</option></select></label><label>Currency for every amount<select name="currency"><option value="MYR">MYR</option><option value="USD">USD</option></select></label><label>${peer?'Reference price status':'IPO stage'}<select name="stage"><option value="prelisting">Pre-listing / offer price</option><option value="listed">Listed / reference price</option></select></label>${ipoInput('sector','Business / sector',{maxlength:120})}${ipoInput('sourceUrl',peer?'Annual report / filing URL':'Prospectus / filing URL',{type:'url',maxlength:1800})}<label>Document status · user confirmed<select name="sourceStatus"><option value="unverified">Not verified</option><option value="draft">Draft / exposure only</option><option value="final">Final / registered filing</option></select></label>${ipoInput('sourceDate','Source last reviewed',{type:'date'})}${ipoInput('pageRefs','Document pages / sections and price date',{maxlength:400})}${ipoInput('periodEnd','Annual financial year-end',{type:'date'})}<label>Financial basis<select name="basis"><option value="unconfirmed">Not confirmed</option><option value="audited">Audited annual</option><option value="unaudited">Other / unaudited</option></select></label>${IPO_METRIC_FIELDS.map(field=>ipoInput(field,peer&&field==='shares'?'Diluted shares · millions':IPO_LABELS[field],{type:'number',...(['price','shares','revenue','debt','cash'].includes(field)?{min:0}:{})})).join('')}</div>`;
+}
+
+function ipoReadEntity(form){
+  const value={};
+  for(const element of form.querySelectorAll('[name]'))value[element.name]=element.type==='checkbox'?element.checked:element.value;
+  return value;
+}
+function ipoFillEntity(form,data){
+  for(const element of form.querySelectorAll('[name]')){
+    if(element.type==='checkbox')element.checked=data[element.name]===true;
+    else element.value=data[element.name]??'';
+  }
+}
+
+function mountIpoWorkspace(rootElement){
+  if(!rootElement)return {destroy(){}};
+  let dossiers=[],currentId='',peers=[],storageWarning='',destroyed=false;
+  try{const saved=globalThis.localStorage?.getItem(IPO_STORAGE_KEY);if(saved)dossiers=parseIpoImport(saved);}catch{storageWarning='Saved IPO research could not be read. Import a backup if available; no saved record has been overwritten.';}
+  rootElement.innerHTML=`<div class="ipo-intro card"><h3>Build a prospectus-backed IPO dossier</h3><p>Compare what you would pay with audited financials and selected listed peers. Enter figures from the final prospectus and annual reports; BursaQuant does not fetch or verify these documents automatically.</p><div class="ipo-source-links">${ipoLink('https://www.bursamalaysia.com/','Bursa Malaysia · official site')}${ipoLink('https://www.sc.com.my/resources/prospectus-exposure','SC · draft prospectus exposure')}${ipoLink('https://www.sec.gov/search-filings','SEC EDGAR · US filings')}${ipoLink('https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-bulletins-17','SEC · IPO research guide')}</div><p class="small muted">Draft exposure documents can change and are not final investment documents. Listing dates, offer terms and financial inputs require your source review. This is a manual research workspace, not a live IPO calendar.</p></div>
+  <div class="ipo-layout space-top"><div class="card ipo-editor"><div class="card-title-row"><h3>IPO details & financials</h3><button type="button" class="btn sm ghost" data-action="new">New dossier</button></div><p class="small muted">All share counts and financial totals below use <strong>millions</strong>; only price and EPS use currency per share. Blank means unknown; enter 0 only when confirmed. Use one audited full year, not a quarter or forecast. Equity, debt and cash use that year-end; post-IPO pro forma adjustments are not inferred.</p><form class="ipo-form" data-role="dossier">${ipoEntityForm()}<div class="ipo-fields">${ipoInput('primaryPct','New shares · % of total offered',{type:'number',min:0,max:100})}${ipoInput('secondaryPct','Existing holders selling · % of offered',{type:'number',min:0,max:100})}</div>${[['useOfProceeds','Use of proceeds · expansion, working capital, debt repayment, fees'],['concentration','Customer / supplier concentration and related-party exposure'],['lockup','Lock-up / moratorium terms and potential share overhang'],['risks','Main risks, governance, dilution and unproven assumptions'],['thesis','Why research this IPO? What would invalidate your thesis?']].map(([field,label])=>`<label class="ipo-note">${label}<textarea name="${field}" maxlength="${IPO_TEXT_FIELDS[field]}" rows="3"></textarea></label>`).join('')}<div class="row-buttons"><button type="submit" class="btn primary">Calculate research report</button><button type="button" class="btn secondary" data-action="save">Save dossier</button></div></form><p class="ipo-status small" data-role="status" role="status" aria-live="polite"></p></div>
+  <aside class="card ipo-saved"><h3>My IPO watchlist</h3><p class="small muted">Saved on this browser only. Export a backup to move research to another device.</p><div data-role="saved" class="ipo-records"></div><div class="row-buttons space-top"><button type="button" class="btn ghost sm" data-action="export">Export backup</button><label class="btn ghost sm ipo-file">Import backup<input type="file" accept=".json,application/json" data-role="import" /></label></div><p class="small muted">Import adds new record IDs, keeps existing records and never imports a trading order.</p></aside></div>
+  <div class="card space-top"><div class="card-title-row"><h3>Choose comparable listed peers</h3><button type="button" class="btn sm secondary" data-action="add-peer">+ Add peer</button></div><p class="small muted">Up to 10 peers. Match the business model, financial year-end, currency and audited annual basis. Each peer needs a source link and review date. Confirm comparability after reviewing growth, size, leverage, accounting and one-off items. Medians exclude incomplete or mismatched entries.</p><div data-role="peers" class="ipo-peer-list"></div></div><div data-role="report" class="space-top" aria-live="polite"><div class="card"><h3>Research report</h3><p class="muted small">Start a dossier and calculate to see valuation, missing evidence and peer comparisons. No sample companies or invented valuations are loaded.</p></div></div>`;
+  const find=selector=>rootElement.querySelector(selector),form=find('[data-role="dossier"]'),status=find('[data-role="status"]');
+  const message=text=>{status.textContent=text;};
+  const makeId=()=>globalThis.crypto?.randomUUID?.()||'ipo_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);
+  function readDossier(){
+    peers=[...rootElement.querySelectorAll('[data-peer-index]')].map(peerForm=>ipoReadEntity(peerForm));
+    return validateIpoDossier({...ipoReadEntity(form),id:currentId,peers});
+  }
+  function persist(next){
+    if(next.length>IPO_MAX_RECORDS)throw new Error('Keep at most 50 dossiers; export and delete older research first.');
+    const text=JSON.stringify({schemaVersion:1,dossiers:next});
+    if(new TextEncoder().encode(text).length>IPO_MAX_BYTES)throw new Error('IPO storage exceeds 1 MB; export and remove older dossiers first.');
+    globalThis.localStorage.setItem(IPO_STORAGE_KEY,text);dossiers=next;storageWarning='';renderSaved();
+  }
+  function renderSaved(){
+    find('[data-role="saved"]').innerHTML=dossiers.length?dossiers.map(record=>`<div class="ipo-record"><strong>${ipoEscape(record.name)}</strong><span class="small muted">${ipoEscape(record.market)} · ${record.stage==='listed'?'Listed':'Pre-listing'} · ${ipoEscape(record.sourceDate||'Review date missing')}</span><div class="row-buttons"><button type="button" class="btn sm ghost" data-action="open" data-id="${ipoEscape(record.id)}">Open</button><button type="button" class="btn sm ghost" data-action="delete" data-id="${ipoEscape(record.id)}">Delete</button></div></div>`).join(''):'<p class="small muted">No IPO dossiers saved yet.</p>';
+  }
+  function renderPeers(){
+    find('[data-role="peers"]').innerHTML=peers.map((peer,index)=>`<details class="ipo-peer" open><summary>Peer ${index+1}${peer.name?' · '+ipoEscape(peer.name):''}</summary><div data-peer-index="${index}" class="ipo-form">${ipoEntityForm(true)}<label class="ipo-check"><input name="comparable" type="checkbox" /> I reviewed this business as comparable to the IPO</label>${ipoInput('peerReason','Why this is a useful peer / differences',{maxlength:500})}<button type="button" class="btn sm ghost" data-action="remove-peer" data-index="${index}">Remove peer</button></div></details>`).join('')||'<p class="small muted">No peers entered. Add two or more well-matched companies for a more useful context.</p>';
+    for(const [index,peer]of peers.entries())ipoFillEntity(find(`[data-peer-index="${index}"]`),peer);
+  }
+  function renderReport(record){
+    find('[data-role="report"]').removeAttribute('data-stale');
+    const comparison=compareIpoPeers(record),m=comparison.subject;
+    const gaps=[...comparison.subjectGaps];
+    for(const field of IPO_METRIC_FIELDS)if(record[field]===null)gaps.push(`${IPO_LABELS[field]} not supplied`);
+    if(!record.useOfProceeds)gaps.push('use of proceeds not documented');
+    if(!record.risks)gaps.push('risks not documented');
+    if(!record.lockup)gaps.push('lock-up / moratorium not documented');
+    const cards=[['Market cap',`${ipoFormat(m.marketCap)} ${record.currency}m`],['P/E',m.pe===null?m.peStatus:ipoFormat(m.pe)+'×'],['P/S',m.ps===null?'Unavailable':ipoFormat(m.ps)+'×'],['Net debt',`${ipoFormat(m.netDebt)} ${record.currency}m`],['EV / revenue',m.evRevenue===null?'Unavailable / N/M':ipoFormat(m.evRevenue)+'×'],['Net margin',m.netMargin===null?'Unavailable':ipoFormat(m.netMargin)+'%']];
+    const metricCell=(key,value)=>ipoFinite(value)?ipoFormat(value)+(['netMargin','returnOnClosingEquity'].includes(key)?'%':'×'):'Unavailable / N/M';
+    find('[data-role="report"]').innerHTML=`<div class="card"><div class="card-title-row"><h3>${ipoEscape(record.name)} · IPO research</h3><span class="badge badge-outline">User-entered evidence</span></div><p class="small muted">${ipoEscape(record.market)} · ${ipoEscape(record.currency)} · Annual financial year ended ${ipoEscape(record.periodEnd||'not supplied')} · Source reviewed ${ipoEscape(record.sourceDate||'not supplied')} · ${ipoLink(record.sourceUrl,'Open source document')}</p>${record.sourceStatus==='draft'?'<p class="ipo-warning">Draft / exposure document: figures and offer terms can change. Obtain the final registered prospectus before deciding.</p>':''}<div class="ipo-metrics">${cards.map(([label,value])=>`<div class="metric"><div class="label">${label}</div><div class="value">${ipoEscape(value)}</div></div>`).join('')}</div><div class="ipo-report-two"><div><h4>Cash and ownership checks</h4><p>EPS on entered diluted shares: ${ipoFormat(m.eps,4)} ${ipoEscape(record.currency)} per share.<br>Operating cash flow / net profit: ${m.cashConversion===null?'Unavailable / N/M':ipoFormat(m.cashConversion)+'%'}.<br>Profit / closing equity: ${m.returnOnClosingEquity===null?'Unavailable / N/M':ipoFormat(m.returnOnClosingEquity)+'%'}.<br>New / existing shares as share of offer: ${ipoFormat(record.primaryPct)}% / ${ipoFormat(record.secondaryPct)}%.</p><p class="small muted">Profit / closing equity is a rough proxy, not ROE using average equity. EPS uses post-IPO diluted shares with historical profit; it is not reported historical EPS. New-share proceeds go to the issuer; secondary-sale proceeds go to selling holders. Allocation and listing returns are not predicted.</p></div><div><h4>Evidence still needed</h4>${gaps.length?`<ul>${gaps.map(gap=>`<li>${ipoEscape(gap)}</li>`).join('')}</ul>`:'<p>Required input fields are present. Accuracy, suitability and completeness still depend on your document review.</p>'}</div></div></div>
+      <div class="card space-top"><h3>Peer comparison · ${comparison.eligiblePeers} eligible of ${comparison.rows.length} entered</h3><div class="scroll-table"><table><thead><tr><th>Measure</th><th>IPO</th><th>Peer median</th><th>Peers used</th><th>Difference to median</th></tr></thead><tbody>${comparison.metrics.map(metric=>`<tr><td>${IPO_NAMES[metric.key]}</td><td>${metricCell(metric.key,metric.value)}</td><td>${metricCell(metric.key,metric.median)}</td><td>${metric.count}</td><td>${metric.differencePct===null?'Unavailable':ipoFormat(metric.differencePct)+'%'}</td></tr>`).join('')}</tbody></table></div>${comparison.rows.map((row,index)=>`<div class="ipo-peer-result"><strong>${ipoEscape(row.name)}</strong> · ${ipoLink(record.peers[index].sourceUrl,'Source')}<p>${row.eligible?'Eligible for medians when the metric is meaningful.':ipoEscape('Excluded: '+row.reasons.join('; '))}</p><p>${ipoEscape(record.peers[index].peerReason||'Comparability rationale not documented.')}</p></div>`).join('')}<p class="small muted">A lower multiple can reflect weaker growth, earnings quality, governance or risk. The median is context, not fair value or a buy signal. Two peers can still be a biased sample. EV here is market cap + entered debt − cash; it excludes preferred shares, non-controlling interests and other adjustments. Banks, insurers and other financial firms need a sector-specific model. Negative or zero profit makes P/E not meaningful; missing inputs remain unavailable.</p></div>
+      <div class="card space-top"><h3>Thesis, offer structure & risks</h3>${[['Thesis / invalidation',record.thesis],['Use of proceeds',record.useOfProceeds],['Concentration / related parties',record.concentration],['Lock-up / potential selling pressure',record.lockup],['Risks / governance',record.risks]].map(([label,value])=>`<div class="ipo-research-note"><h4>${label}</h4><p>${ipoEscape(value||'Not documented.')}</p></div>`).join('')}<p class="small muted">${record.stage==='prelisting'?'Pre-listing IPOs have no traded-price history for technical timing. After listing, enough completed candles must accumulate before normal indicators are available.':'Use Stock Analysis separately once the listed ticker has sufficient completed price history. Listing-day volatility and gaps can make planned stops unreliable.'} IPO allocation and market gains are uncertain. Compare the downside, liquidity and your position risk before committing capital.</p></div>`;
+  }
+  function reset(){currentId='';peers=[];form.reset();form.querySelector('[name="market"]').value='MY';form.querySelector('[name="currency"]').value='MYR';renderPeers();find('[data-role="report"]').innerHTML='<div class="card"><h3>New IPO research</h3><p class="small muted">Enter source-backed figures and calculate a report.</p></div>';message('New unsaved dossier.');}
+  function download(){
+    const blob=new Blob([JSON.stringify({schemaVersion:1,exportedAt:new Date().toISOString(),dossiers},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),anchor=document.createElement('a');
+    anchor.href=url;anchor.download='bursaquant-ipo-research.json';anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+  function onSubmit(event){if(event.target!==form)return;event.preventDefault();try{const record=readDossier();renderReport(record);message('Report calculated from the current inputs. Save the dossier to keep these edits.');}catch(error){message(error.message);}}
+  function markEdited(){
+    const report=find('[data-role="report"]');
+    if(!report.hasAttribute('data-stale')){
+      report.setAttribute('data-stale','true');
+      const warning=document.createElement('p');warning.className='ipo-warning';warning.textContent='Inputs have changed. The report below uses the previous calculation. Recalculate to include current edits.';report.prepend(warning);
+    }
+    message('Unsaved edits. Calculate the report again, then save the dossier to keep the changes.');
+  }
+  function onInput(event){if(event.target.closest('[data-role="dossier"], [data-peer-index]'))markEdited();}
+  function onClick(event){
+    const button=event.target.closest('[data-action]');if(!button||!rootElement.contains(button))return;
+    try{
+      const action=button.dataset.action;
+      if(action==='new'){reset();return;}
+      if(action==='save'){
+        const record=readDossier();record.id ||= makeId();
+        const next=dossiers.some(item=>item.id===record.id)?dossiers.map(item=>item.id===record.id?record:item):[record,...dossiers];
+        persist(next);currentId=record.id;renderReport(record);message('IPO dossier saved on this browser. Export a backup for other devices.');
+      }
+      if(action==='open'){
+        const record=dossiers.find(item=>item.id===button.dataset.id);if(!record)return;currentId=record.id;peers=record.peers.map(peer=>({...peer}));ipoFillEntity(form,record);renderPeers();renderReport(record);message('Saved dossier opened. Changes are kept only when you press Save dossier.');
+      }
+      if(action==='delete'){
+        const id=button.dataset.id;persist(dossiers.filter(record=>record.id!==id));if(currentId===id)currentId='';message('Saved dossier deleted. The current form stays available until you leave or start a new dossier.');
+      }
+      if(action==='add-peer'){
+        peers=[...rootElement.querySelectorAll('[data-peer-index]')].map(peerForm=>ipoReadEntity(peerForm));if(peers.length>=10)throw new Error('Use at most 10 peers.');
+        peers.push({market:form.querySelector('[name="market"]').value,currency:form.querySelector('[name="currency"]').value,stage:'listed',periodEnd:form.querySelector('[name="periodEnd"]').value,basis:'unconfirmed',sourceStatus:'unverified'});renderPeers();markEdited();message('Peer added. Fill its source and financials, confirm comparability, then calculate again.');
+      }
+      if(action==='remove-peer'){peers=[...rootElement.querySelectorAll('[data-peer-index]')].map(peerForm=>ipoReadEntity(peerForm));peers.splice(Number(button.dataset.index),1);renderPeers();markEdited();message('Peer removed from current edits. Calculate and save to update the report and stored dossier.');}
+      if(action==='export'){download();message('IPO backup exported. It contains your research, not gateway or AI access credentials.');}
+    }catch(error){message(error.name==='QuotaExceededError'?'Browser storage is full. Export a backup and free space before saving.':error.message||'IPO action failed.');}
+  }
+  async function onChange(event){
+    if(event.target!==find('[data-role="import"]'))return;
+    const input=event.target,file=input.files?.[0];if(!file)return;
+    try{
+      if(file.size>IPO_MAX_BYTES)throw new Error('IPO backup exceeds 1 MB.');
+      const imported=parseIpoImport(await file.text());if(destroyed)return;
+      const existing=new Set(dossiers.map(record=>record.id));let added=0;
+      const newRecords=imported.filter(record=>!record.id||!existing.has(record.id)).map(record=>({...record,id:record.id||makeId()}));
+      added=newRecords.length;persist([...dossiers,...newRecords]);message(`Imported ${added} dossier${added===1?'':'s'}. Existing record IDs were kept unchanged.`);
+    }catch(error){message(error.message||'Could not import this IPO backup.');}finally{input.value='';}
+  }
+  renderSaved();renderPeers();if(storageWarning)message(storageWarning);
+  rootElement.addEventListener('submit',onSubmit);rootElement.addEventListener('click',onClick);rootElement.addEventListener('change',onChange);rootElement.addEventListener('input',onInput);
+  return {destroy(){destroyed=true;rootElement.removeEventListener('submit',onSubmit);rootElement.removeEventListener('click',onClick);rootElement.removeEventListener('change',onChange);rootElement.removeEventListener('input',onInput);}};
+}
+
+return {safeIpoSourceUrl,validateIpoDossier,calculateIpoMetrics,compareIpoPeers,parseIpoImport,mountIpoWorkspace};
+})();
 const {evaluateAccumulation,DEFAULT_SCREEN_SETTINGS}=BQAccumulation;
 const {screenInstrument,parseScreenSymbols,parseScreenListFile,createScreenRun,screenCoverage,scanDailyBatch}=BQScanRunner;
+const {buildDeepReport}=BQDeepAnalysis;
+const {mountResearchWorkspace}=BQResearchUI;
+const {mountIpoWorkspace}=BQIpo;
+function deepSelection(){
+ const controls=screenControls(),screenSettings={minAverageVolume:controls.minAverageVolume,minAverageTurnover:symbol.market==='MY'?controls.turnoverMY:controls.turnoverUS,maxRangePct:controls.maxRangePct,cmfThreshold:controls.cmfThreshold};
+ return {symbol:symbol.symbol,name:symbol.name,market:symbol.market,currency:symbol.currency,type:symbol.type,mode:style,strategy:ratingStrategy,riskSettings:{...settings},screenSettings,key:JSON.stringify([symbol.symbol,symbol.market,symbol.type,dataProvider,gatewayBase,gatewayRevision,demoMode,style,ratingStrategy,settings,screenSettings]),connectionKey:JSON.stringify([dataProvider,gatewayBase,gatewayRevision]),canLoad:!!gatewayBase&&!demoMode&&['Stock','ETF'].includes(symbol.type),unavailableReason:!gatewayBase?'Connect your gateway in Risk & Data Settings first.':demoMode?'Select a stock and click Refresh Data in Stock Analysis to leave demo mode.':'Deep research supports ordinary stocks and ETFs.'};
+}
+async function researchGatewayFetch(path,{method='GET',body}={}){
+ if(!gatewayBase)throw new Error('Connect your personal gateway in Risk & Data Settings first.');
+ const resp=await fetch(gatewayUrl(path),{method,cache:'no-store',signal:AbortSignal.timeout(25000),headers:{Accept:'application/json',...(body?{'Content-Type':'application/json'}:{}),...(gatewayAccessCode?{'X-BQ-Access-Token':gatewayAccessCode}:{})},...(body?{body:JSON.stringify(body)}:{})});
+ let data=null;try{data=await resp.json();}catch{}
+ if(!resp.ok)throw Object.assign(new Error(data?.error?.message||`Gateway HTTP ${resp.status}`),{status:resp.status,code:data?.error?.code});
+ if(!data||typeof data!=='object')throw new Error('Gateway returned an unreadable response.');
+ return data;
+}
+function registerResearch(){
+ researchWorkspace=mountResearchWorkspace($('deepWorkspace'),{
+   getSelection:deepSelection,
+   fetchMarket:(selection,interval)=>researchGatewayFetch(`/market?market=${encodeURIComponent(selection.market)}&symbol=${encodeURIComponent(selection.symbol)}&interval=${encodeURIComponent(interval)}&provider=${encodeURIComponent(dataProvider)}&limit=500`),
+   analyseFrame:(bars,selection)=>analyse(bars,selection.mode,selection.strategy),
+   evaluateDaily:(bars,selection)=>evaluateAccumulation(bars,selection.screenSettings),
+   sizePlans:(analysis,selection)=>analysis.plans.map(plan=>sizePosition(plan,selection.riskSettings,selection.currency,selection.market==='MY'&&selection.type==='Stock'?100:1)),
+   buildReport:buildDeepReport,getAIStatus:()=>researchGatewayFetch('/research'),sendAI:body=>researchGatewayFetch('/research',{method:'POST',body}),download
+ });
+ $('openDeepResearch').onclick=()=>{setPage('research');researchWorkspace.run();};
+ mountIpoWorkspace($('ipoWorkspace'));
+}
 const instruments=[
  {symbol:'AAPL',name:'Apple Inc.',market:'US',exchange:'NASDAQ',currency:'USD',type:'Stock'},
  {symbol:'NVDA',name:'NVIDIA Corporation',market:'US',exchange:'NASDAQ',currency:'USD',type:'Stock'},
@@ -356,6 +842,7 @@ let dataProvider=load('dataProvider','auto'),demoMode=load('demoMode',!gatewayBa
 if(!['auto','yahoo','twelvedata','isaham'].includes(dataProvider))dataProvider='auto';
 let requestSeq=0,activeDataKey='',dataError='';
 let lastProviderMeta=null;
+let researchWorkspace=null,gatewayRevision=0;
 let ratingStrategy=normalizeStrategy(load('ratingStrategy',null));
 let screenRun=load('screenRun',null),screenDirectory=load('screenDirectory',null),screenStop=false,screenLoading=false,screenDirectorySeq=0,screenVisible=100;
 if(screenRun?.version!==1||!Array.isArray(screenRun?.queue)||!Array.isArray(screenRun?.results))screenRun=null;
@@ -365,7 +852,7 @@ function notify(msg){const t=$('toast');t.textContent=msg;t.classList.add('show'
 function fmt(v,dec=2){return Number.isFinite(v)?Number(v).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec}):'—'};
 const money=(v,currency=symbol.currency)=>`${currency==='USD'?'$':'RM'}${fmt(v,v>1?2:4)}`;
 const nfmt=v=>Number.isFinite(v)?fmt(v,2):'—';
-function setPage(page){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('crumb').textContent=({'analysis':'STOCK ANALYSIS','screener':'STOCK SCREENER','watchlist':'WATCHLIST','journal':'TRADING JOURNAL','settings':'SETTINGS','strategy':'STRATEGY & LEARNING'})[page]||'STOCK ANALYSIS';$('sidebar').classList.remove('open');if(page==='settings')fillSettings();if(page==='strategy'){fillStrategyForm();renderResearchAnswer();}if(page==='watchlist')renderWatch();if(page==='journal')renderJournal();if(page==='screener')renderScreener();if(page==='analysis')requestAnimationFrame(drawChart);window.scrollTo({top:0,behavior:'instant'});}
+function setPage(page){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('crumb').textContent=({'analysis':'STOCK ANALYSIS','research':'DEEP RESEARCH & AI','ipo':'IPO RESEARCH','screener':'STOCK SCREENER','watchlist':'WATCHLIST','journal':'TRADING JOURNAL','settings':'SETTINGS','strategy':'STRATEGY & LEARNING'})[page]||'STOCK ANALYSIS';$('sidebar').classList.remove('open');if(page==='settings')fillSettings();if(page==='strategy'){fillStrategyForm();renderResearchAnswer();}if(page==='watchlist')renderWatch();if(page==='journal')renderJournal();if(page==='screener')renderScreener();if(page==='research')researchWorkspace?.refresh();if(page==='analysis')requestAnimationFrame(drawChart);window.scrollTo({top:0,behavior:'instant'});}
 function getInstrument(q){q=q.toUpperCase().replace('.KL','');return instruments.find(s=>s.symbol.toUpperCase()===q)||instruments.find(s=>s.name.toUpperCase()===q)||null}
 function selectedInstrument(q){const found=getInstrument(q);if(found)return found;const raw=String(q).trim().toUpperCase().replace(/[^A-Z0-9.^:-]/g,'').slice(0,24);if(!raw)throw new Error('Type a ticker or company name first.');return {symbol:raw,name:`Custom ticker ${raw}`,market:/^\d{4}/.test(raw)?'MY':'US',exchange:'USER SELECTED',currency:/^\d{4}/.test(raw)?'MYR':'USD',type:'Stock'};}
 let searchTimer=null;
@@ -618,7 +1105,7 @@ function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEvent
   e.preventDefault();const input=$('gatewayUrl').value.trim().replace(/\/$/,'');
   if(input&&input!=='/api'){try{const u=new URL(input);if(!['http:','https:'].includes(u.protocol))throw Error();}catch{return notify('Use an HTTPS gateway URL ending in /api, or /api for this site.');}}
   gatewayBase=input||defaultGateway;dataProvider=$('dataProvider').value;gatewayAccessCode=$('gatewayAccessCode').value.trim();
-  persist('gatewayBase',gatewayBase);persist('dataProvider',dataProvider);persist('gatewayAccessCode',gatewayAccessCode);demoMode=false;persist('demoMode',false);requestSeq++;
+  persist('gatewayBase',gatewayBase);persist('dataProvider',dataProvider);persist('gatewayAccessCode',gatewayAccessCode);demoMode=false;persist('demoMode',false);requestSeq++;gatewayRevision++;
   if(!gatewayBase){clearAnalysis('Enter the deployed gateway URL, or choose Load Demo.');return;}
   try{const h=await gatewayFetch('/health');if(h.status!=='ok')throw Error('Gateway responded but is not ready.');notify('Gateway connected. Requesting the latest available candles…');await fetchOrDemo();}
   catch(err){dataError=err.message;clearAnalysis('Gateway test failed: '+err.message+'. Check the URL and your access code in Risk & Data Settings.');$('refreshData').disabled=false;notify('Gateway test failed: '+err.message);}
@@ -628,6 +1115,6 @@ function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEvent
  $('refreshData').onclick=()=>{if(!gatewayBase){if(hosted){gatewayBase=defaultGateway;persist('gatewayBase',gatewayBase);}else{setPage('settings');notify('Enter your gateway URL and access code, then Save & test gateway.');return;}}demoMode=false;persist('demoMode',false);fetchOrDemo();};
  const canvas=$('priceCanvas');canvas.addEventListener('mousemove',e=>{const meta=canvas.__chartMeta;if(!meta)return;const rect=canvas.getBoundingClientRect(),x=e.clientX-rect.left,index=meta.start+Math.floor((x-meta.padLeft)/meta.ww*meta.n);if(index<meta.start||index>=currentAnalysis.candles.length){$('chartTooltip').classList.add('hidden');return}hoverIndex=index;const c=currentAnalysis.candles[index];$('chartTooltip').innerHTML=`<strong>${htmlEscape(exchangeTimestamp(c.time,false))}</strong><br>O ${money(c.open)} &nbsp; H ${money(c.high)}<br>L ${money(c.low)} &nbsp; C ${money(c.close)}<br>Vol ${fmt(c.volume,0)}`;$('chartTooltip').style.left=Math.max(10,Math.min(rect.width-178,x+13))+'px';$('chartTooltip').classList.remove('hidden');drawChart()});canvas.addEventListener('mouseleave',()=>{hoverIndex=null;$('chartTooltip').classList.add('hidden');drawChart()});canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.min(candles.length,Math.max(25,zoom+(e.deltaY>0?12:-12)));drawChart()},{passive:false});window.addEventListener('resize',drawChart);
 }
-register();registerStrategy();registerScreener();$('tickerInput').value=symbol.symbol;if(demoMode)loadDemo(false);else fetchOrDemo();setInterval(()=>{$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT'},5000);$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT';
+register();registerStrategy();registerScreener();registerResearch();$('tickerInput').value=symbol.symbol;if(demoMode)loadDemo(false);else fetchOrDemo();setInterval(()=>{$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT'},5000);$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT';
 
 })();

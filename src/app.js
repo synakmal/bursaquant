@@ -1,6 +1,33 @@
 import {analyse,generateDemo,parseCSV,sizePosition,exchangeEpoch,DEFAULT_SETTINGS,round,RATING_INDICATORS,STRATEGY_PRESETS,normalizeStrategy} from './engine.js';
 import {evaluateAccumulation,DEFAULT_SCREEN_SETTINGS} from './screener.js';
 import {screenInstrument,parseScreenSymbols,parseScreenListFile,createScreenRun,screenCoverage,scanDailyBatch} from './scan-runner.js';
+import {buildDeepReport} from './deep-analysis.js';
+import {mountResearchWorkspace} from './research-ui.js';
+import {mountIpoWorkspace} from './ipo.js';
+function deepSelection(){
+ const controls=screenControls(),screenSettings={minAverageVolume:controls.minAverageVolume,minAverageTurnover:symbol.market==='MY'?controls.turnoverMY:controls.turnoverUS,maxRangePct:controls.maxRangePct,cmfThreshold:controls.cmfThreshold};
+ return {symbol:symbol.symbol,name:symbol.name,market:symbol.market,currency:symbol.currency,type:symbol.type,mode:style,strategy:ratingStrategy,riskSettings:{...settings},screenSettings,key:JSON.stringify([symbol.symbol,symbol.market,symbol.type,dataProvider,gatewayBase,gatewayRevision,demoMode,style,ratingStrategy,settings,screenSettings]),connectionKey:JSON.stringify([dataProvider,gatewayBase,gatewayRevision]),canLoad:!!gatewayBase&&!demoMode&&['Stock','ETF'].includes(symbol.type),unavailableReason:!gatewayBase?'Connect your gateway in Risk & Data Settings first.':demoMode?'Select a stock and click Refresh Data in Stock Analysis to leave demo mode.':'Deep research supports ordinary stocks and ETFs.'};
+}
+async function researchGatewayFetch(path,{method='GET',body}={}){
+ if(!gatewayBase)throw new Error('Connect your personal gateway in Risk & Data Settings first.');
+ const resp=await fetch(gatewayUrl(path),{method,cache:'no-store',signal:AbortSignal.timeout(25000),headers:{Accept:'application/json',...(body?{'Content-Type':'application/json'}:{}),...(gatewayAccessCode?{'X-BQ-Access-Token':gatewayAccessCode}:{})},...(body?{body:JSON.stringify(body)}:{})});
+ let data=null;try{data=await resp.json();}catch{}
+ if(!resp.ok)throw Object.assign(new Error(data?.error?.message||`Gateway HTTP ${resp.status}`),{status:resp.status,code:data?.error?.code});
+ if(!data||typeof data!=='object')throw new Error('Gateway returned an unreadable response.');
+ return data;
+}
+function registerResearch(){
+ researchWorkspace=mountResearchWorkspace($('deepWorkspace'),{
+   getSelection:deepSelection,
+   fetchMarket:(selection,interval)=>researchGatewayFetch(`/market?market=${encodeURIComponent(selection.market)}&symbol=${encodeURIComponent(selection.symbol)}&interval=${encodeURIComponent(interval)}&provider=${encodeURIComponent(dataProvider)}&limit=500`),
+   analyseFrame:(bars,selection)=>analyse(bars,selection.mode,selection.strategy),
+   evaluateDaily:(bars,selection)=>evaluateAccumulation(bars,selection.screenSettings),
+   sizePlans:(analysis,selection)=>analysis.plans.map(plan=>sizePosition(plan,selection.riskSettings,selection.currency,selection.market==='MY'&&selection.type==='Stock'?100:1)),
+   buildReport:buildDeepReport,getAIStatus:()=>researchGatewayFetch('/research'),sendAI:body=>researchGatewayFetch('/research',{method:'POST',body}),download
+ });
+ $('openDeepResearch').onclick=()=>{setPage('research');researchWorkspace.run();};
+ mountIpoWorkspace($('ipoWorkspace'));
+}
 const instruments=[
  {symbol:'AAPL',name:'Apple Inc.',market:'US',exchange:'NASDAQ',currency:'USD',type:'Stock'},
  {symbol:'NVDA',name:'NVIDIA Corporation',market:'US',exchange:'NASDAQ',currency:'USD',type:'Stock'},
@@ -28,6 +55,7 @@ let dataProvider=load('dataProvider','auto'),demoMode=load('demoMode',!gatewayBa
 if(!['auto','yahoo','twelvedata','isaham'].includes(dataProvider))dataProvider='auto';
 let requestSeq=0,activeDataKey='',dataError='';
 let lastProviderMeta=null;
+let researchWorkspace=null,gatewayRevision=0;
 let ratingStrategy=normalizeStrategy(load('ratingStrategy',null));
 let screenRun=load('screenRun',null),screenDirectory=load('screenDirectory',null),screenStop=false,screenLoading=false,screenDirectorySeq=0,screenVisible=100;
 if(screenRun?.version!==1||!Array.isArray(screenRun?.queue)||!Array.isArray(screenRun?.results))screenRun=null;
@@ -37,7 +65,7 @@ function notify(msg){const t=$('toast');t.textContent=msg;t.classList.add('show'
 function fmt(v,dec=2){return Number.isFinite(v)?Number(v).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec}):'—'};
 const money=(v,currency=symbol.currency)=>`${currency==='USD'?'$':'RM'}${fmt(v,v>1?2:4)}`;
 const nfmt=v=>Number.isFinite(v)?fmt(v,2):'—';
-function setPage(page){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('crumb').textContent=({'analysis':'STOCK ANALYSIS','screener':'STOCK SCREENER','watchlist':'WATCHLIST','journal':'TRADING JOURNAL','settings':'SETTINGS','strategy':'STRATEGY & LEARNING'})[page]||'STOCK ANALYSIS';$('sidebar').classList.remove('open');if(page==='settings')fillSettings();if(page==='strategy'){fillStrategyForm();renderResearchAnswer();}if(page==='watchlist')renderWatch();if(page==='journal')renderJournal();if(page==='screener')renderScreener();if(page==='analysis')requestAnimationFrame(drawChart);window.scrollTo({top:0,behavior:'instant'});}
+function setPage(page){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('crumb').textContent=({'analysis':'STOCK ANALYSIS','research':'DEEP RESEARCH & AI','ipo':'IPO RESEARCH','screener':'STOCK SCREENER','watchlist':'WATCHLIST','journal':'TRADING JOURNAL','settings':'SETTINGS','strategy':'STRATEGY & LEARNING'})[page]||'STOCK ANALYSIS';$('sidebar').classList.remove('open');if(page==='settings')fillSettings();if(page==='strategy'){fillStrategyForm();renderResearchAnswer();}if(page==='watchlist')renderWatch();if(page==='journal')renderJournal();if(page==='screener')renderScreener();if(page==='research')researchWorkspace?.refresh();if(page==='analysis')requestAnimationFrame(drawChart);window.scrollTo({top:0,behavior:'instant'});}
 function getInstrument(q){q=q.toUpperCase().replace('.KL','');return instruments.find(s=>s.symbol.toUpperCase()===q)||instruments.find(s=>s.name.toUpperCase()===q)||null}
 function selectedInstrument(q){const found=getInstrument(q);if(found)return found;const raw=String(q).trim().toUpperCase().replace(/[^A-Z0-9.^:-]/g,'').slice(0,24);if(!raw)throw new Error('Type a ticker or company name first.');return {symbol:raw,name:`Custom ticker ${raw}`,market:/^\d{4}/.test(raw)?'MY':'US',exchange:'USER SELECTED',currency:/^\d{4}/.test(raw)?'MYR':'USD',type:'Stock'};}
 let searchTimer=null;
@@ -290,7 +318,7 @@ function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEvent
   e.preventDefault();const input=$('gatewayUrl').value.trim().replace(/\/$/,'');
   if(input&&input!=='/api'){try{const u=new URL(input);if(!['http:','https:'].includes(u.protocol))throw Error();}catch{return notify('Use an HTTPS gateway URL ending in /api, or /api for this site.');}}
   gatewayBase=input||defaultGateway;dataProvider=$('dataProvider').value;gatewayAccessCode=$('gatewayAccessCode').value.trim();
-  persist('gatewayBase',gatewayBase);persist('dataProvider',dataProvider);persist('gatewayAccessCode',gatewayAccessCode);demoMode=false;persist('demoMode',false);requestSeq++;
+  persist('gatewayBase',gatewayBase);persist('dataProvider',dataProvider);persist('gatewayAccessCode',gatewayAccessCode);demoMode=false;persist('demoMode',false);requestSeq++;gatewayRevision++;
   if(!gatewayBase){clearAnalysis('Enter the deployed gateway URL, or choose Load Demo.');return;}
   try{const h=await gatewayFetch('/health');if(h.status!=='ok')throw Error('Gateway responded but is not ready.');notify('Gateway connected. Requesting the latest available candles…');await fetchOrDemo();}
   catch(err){dataError=err.message;clearAnalysis('Gateway test failed: '+err.message+'. Check the URL and your access code in Risk & Data Settings.');$('refreshData').disabled=false;notify('Gateway test failed: '+err.message);}
@@ -300,4 +328,4 @@ function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEvent
  $('refreshData').onclick=()=>{if(!gatewayBase){if(hosted){gatewayBase=defaultGateway;persist('gatewayBase',gatewayBase);}else{setPage('settings');notify('Enter your gateway URL and access code, then Save & test gateway.');return;}}demoMode=false;persist('demoMode',false);fetchOrDemo();};
  const canvas=$('priceCanvas');canvas.addEventListener('mousemove',e=>{const meta=canvas.__chartMeta;if(!meta)return;const rect=canvas.getBoundingClientRect(),x=e.clientX-rect.left,index=meta.start+Math.floor((x-meta.padLeft)/meta.ww*meta.n);if(index<meta.start||index>=currentAnalysis.candles.length){$('chartTooltip').classList.add('hidden');return}hoverIndex=index;const c=currentAnalysis.candles[index];$('chartTooltip').innerHTML=`<strong>${htmlEscape(exchangeTimestamp(c.time,false))}</strong><br>O ${money(c.open)} &nbsp; H ${money(c.high)}<br>L ${money(c.low)} &nbsp; C ${money(c.close)}<br>Vol ${fmt(c.volume,0)}`;$('chartTooltip').style.left=Math.max(10,Math.min(rect.width-178,x+13))+'px';$('chartTooltip').classList.remove('hidden');drawChart()});canvas.addEventListener('mouseleave',()=>{hoverIndex=null;$('chartTooltip').classList.add('hidden');drawChart()});canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.min(candles.length,Math.max(25,zoom+(e.deltaY>0?12:-12)));drawChart()},{passive:false});window.addEventListener('resize',drawChart);
 }
-register();registerStrategy();registerScreener();$('tickerInput').value=symbol.symbol;if(demoMode)loadDemo(false);else fetchOrDemo();setInterval(()=>{$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT'},5000);$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT';
+register();registerStrategy();registerScreener();registerResearch();$('tickerInput').value=symbol.symbol;if(demoMode)loadDemo(false);else fetchOrDemo();setInterval(()=>{$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT'},5000);$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT';
