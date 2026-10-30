@@ -8,7 +8,7 @@ Updated 30 October 2026. GitHub remains the source of truth; this personal site 
 - Daily / 4H / 1H report with provenance, freshness, coverage, conflicts, accumulation hypotheses and conditional scenarios.
 - Manual IPO dossiers with prospectus references, audited annual figures, offer structure, valuation, peer eligibility, missing inputs, local save and backup/import.
 - Optional private AI Coach for stock technical reports. Disabled until a model, private key and spending controls are deliberately configured. No provider or model chosen, no paid calls made.
-- 160 automated tests verify calculations, privacy boundaries and interactions; they do not establish profitability.
+- 161 automated tests verify calculations, privacy boundaries and interactions; they do not establish profitability.
 
 ## Next: evaluate the research workflow
 

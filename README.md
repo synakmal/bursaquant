@@ -10,7 +10,7 @@ Read [DEEP-RESEARCH-START-HERE.md](DEEP-RESEARCH-START-HERE.md) for the walkthro
 
 The optional **AI Research Coach** explains a fresh stock technical report. Calls are disabled until explicitly configured; no AI account, model or paid service is selected for this release. See [AI-SETUP.md](AI-SETUP.md). The server removes position sizes and account settings, limits requests and uses the existing private access code. It has no live web, news or prospectus access. It does not provide a monthly budget; configure a provider API-key/team budget before enabling it.
 
-Validation: 160 automated tests pass, covering existing behaviour, report provenance/coverage, request races, private AI boundaries and IPO valuation/import edge cases. This verifies implementation, not profitability. iSaham remains optional and deferred; warrants remain outside scope.
+Validation: 161 automated tests pass, covering existing behaviour, report provenance/coverage, request races, private AI boundaries and IPO valuation/import edge cases. This verifies implementation, not profitability. iSaham remains optional and deferred; warrants remain outside scope.
 
 ## New in v0.5: a real daily screener
 

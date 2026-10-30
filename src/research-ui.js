@@ -67,7 +67,7 @@ export function mountResearchWorkspace(root,deps){
       }
       if(startKey!==key()||seq!==sequence){el('deepProgress').textContent='Selection changed during loading. Build a report for the new selection.';return;}
       report=deps.buildReport({symbol:selection.symbol,market:selection.market,frames,generatedAt:new Date().toISOString(),mode:selection.mode,strategy:selection.strategy});
-      reportKey=startKey;render();el('deepProgress').textContent=`${paused?'Paused. ':''}${report.counts.available}/3 timeframes passed the data checks. ${report.status==='complete'?'Report ready.':'Missing or rejected timeframes are shown below.'}`;
+      reportKey=startKey;render();el('deepProgress').textContent=`${paused?'Paused. ':''}${report.counts.available}/3 timeframes passed the data checks. ${report.status==='complete'?'Report ready.':'Missing or rejected timeframes are shown below.'}`;el('researchAIAnswer').textContent='No AI answer requested. Review the report above; use Check AI setup before asking a question.';
     }catch(error){el('deepProgress').textContent='Report unavailable: '+error.message;}
     finally{running=false;refresh();}
   }

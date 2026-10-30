@@ -27,6 +27,13 @@ test('three verified timeframes produce a bounded evidence report and conditiona
   assert.doesNotThrow(()=>JSON.stringify(result));assert.equal(result.probability,undefined);
 });
 
+test('Yahoo completion remains inferred when gateway metadata omits the optional inference flag',()=>{
+  const item=frame();delete item.meta.completionInferred;
+  const result=report([item]).frames[0];assert.equal(result.status,'available');assert.equal(result.completedCandles,true);assert.equal(result.completionInferred,true);assert.ok(result.warnings.some(value=>value.includes('completion is inferred')));
+  item.meta.provider='twelvedata';const reported=report([item]).frames[0];assert.equal(reported.completionInferred,false);assert.ok(!reported.warnings.some(value=>value.includes('completion is inferred')));
+  item.meta.completionInferred=true;assert.equal(report([item]).frames[0].completionInferred,true);
+});
+
 test('bullish daily and bearish 4H readings expose conflict even when 1H is missing',()=>{
   const result=report([frame(),frame('4h',{direction:-1})]);
   assert.equal(result.status,'partial');assert.equal(result.alignment,'conflicting');assert.equal(result.counts.bearish,1);assert.ok(result.supporting.length);assert.ok(result.contrary.length);

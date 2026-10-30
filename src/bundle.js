@@ -374,7 +374,7 @@ function deepFrame(input,timeframe,nowSeconds){
   base.provider=meta.provider;base.timezone=deepText(meta.timezone,80)||null;base.fetchedAt=deepText(meta.fetchedAt,60)||null;
   if(meta.interval!==timeframe)return invalid('invalid','The provider interval does not match this report timeframe.');
   if(meta.completedCandles!==true)return invalid('incomplete','The gateway cannot establish completed candles for this timeframe.');
-  base.completedCandles=true;base.completionInferred=meta.completionInferred===true;
+  base.completedCandles=true;base.completionInferred=meta.provider==='yahoo'||meta.completionInferred===true;
   if(meta.instrumentType&&!['EQUITY','ETF'].includes(String(meta.instrumentType).toUpperCase()))return invalid('unsupported','This instrument is not an eligible stock or ETF.');
   if(!Array.isArray(bars)||bars.length<55)return invalid('insufficient','At least 55 completed candles are required for technical analysis.');
   base.barsUsed=bars.length;
@@ -414,7 +414,7 @@ function deepFrame(input,timeframe,nowSeconds){
   if(analysis.hasVolume!==true)base.warnings.push('Usable volume is missing; volume confirmation is unavailable.');
   else if(deepNumber(analysis.rvol))base.observations.push(`RVOL is ${deepRound(analysis.rvol)} times the preceding 20 positive-volume average. Volume alone does not establish buying direction.`);
   if(analysis.ratingCoverage.availableWeight<analysis.ratingCoverage.selectedWeight)base.warnings.push('Some selected indicators are unavailable and excluded from the normalised rating.');
-  if(meta.completionInferred)base.warnings.push('Candle completion is inferred by the gateway and is not guaranteed by the provider.');
+  if(base.completionInferred)base.warnings.push('Candle completion is inferred by the gateway and is not guaranteed by the provider.');
   base.warnings.push('The latest candle is a completed historical bar, not a live trade. Stop fills and target prices are not guaranteed.');
   base.plans=(Array.isArray(analysis.plans)?analysis.plans:[]).map((plan,index)=>deepPlan(plan,input.sizedPlans?.[index]?.position??input.sizedPlans?.[index])).filter(Boolean);
   if(timeframe==='1day')base.accumulation=deepAccumulation(input.accumulation);
@@ -522,7 +522,7 @@ function mountResearchWorkspace(root,deps){
       }
       if(startKey!==key()||seq!==sequence){el('deepProgress').textContent='Selection changed during loading. Build a report for the new selection.';return;}
       report=deps.buildReport({symbol:selection.symbol,market:selection.market,frames,generatedAt:new Date().toISOString(),mode:selection.mode,strategy:selection.strategy});
-      reportKey=startKey;render();el('deepProgress').textContent=`${paused?'Paused. ':''}${report.counts.available}/3 timeframes passed the data checks. ${report.status==='complete'?'Report ready.':'Missing or rejected timeframes are shown below.'}`;
+      reportKey=startKey;render();el('deepProgress').textContent=`${paused?'Paused. ':''}${report.counts.available}/3 timeframes passed the data checks. ${report.status==='complete'?'Report ready.':'Missing or rejected timeframes are shown below.'}`;el('researchAIAnswer').textContent='No AI answer requested. Review the report above; use Check AI setup before asking a question.';
     }catch(error){el('deepProgress').textContent='Report unavailable: '+error.message;}
     finally{running=false;refresh();}
   }
