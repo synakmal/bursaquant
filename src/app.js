@@ -6,6 +6,7 @@ import {mountResearchWorkspace} from './research-ui.js';
 import {mountIpoWorkspace} from './ipo.js';
 import {validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings} from './holdings-model.js';
 import {HOLDING_STYLES,reviewHolding} from './holding-review.js';
+import {buildHoldingGuidance} from './holding-guidance.js';
 import {mountHoldingsWorkspace} from './holdings-ui.js';
 function analysisHoldingDraft(){
  const instrumentType=String(lastProviderMeta?.instrumentType||'').toUpperCase();
@@ -21,7 +22,7 @@ function updateHoldingShortcut(){
 function registerHoldings(){
  holdingsWorkspace=mountHoldingsWorkspace($('holdingsWorkspace'),{
    model:{validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings},
-   styles:HOLDING_STYLES,reviewHolding,
+   styles:HOLDING_STYLES,reviewHolding,buildGuidance:buildHoldingGuidance,
    getConnectionKey:()=>JSON.stringify([gatewayBase,dataProvider,gatewayRevision,ratingStrategy]),
    canFetch:()=>({ready:!!gatewayBase&&!demoMode,message:!gatewayBase?'Connect your personal data gateway in Risk & Data Settings first.':'Click Refresh Data in Stock Analysis to leave demo mode before reviewing a holding.'}),
    fetchMarket:(item,interval)=>researchGatewayFetch(`/market?market=${encodeURIComponent(item.market)}&symbol=${encodeURIComponent(item.symbol)}&interval=${encodeURIComponent(interval)}&provider=${encodeURIComponent(dataProvider)}&limit=500`),

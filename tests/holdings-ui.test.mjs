@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as model from '../src/holdings-model.js';
 import {HOLDING_STYLES,reviewHolding} from '../src/holding-review.js';
+import {buildHoldingGuidance} from '../src/holding-guidance.js';
 import {analyse} from '../src/engine.js';
 import {createHoldingsController,mountHoldingsWorkspace} from '../src/holdings-ui.js';
 
@@ -202,6 +203,23 @@ test('expired reviews and their quotes disappear on refresh without a network re
 });
 
 function action(target){return {target:{dataset:target,closest(){return this;}}};}
+
+test('holding analysis renders an explained response and scenarios without recording an exit',async t=>{
+  let calls=0;
+  const s=mount(t,{now:()=>Date.parse('2026-11-01T12:00:00Z'),buildGuidance:buildHoldingGuidance,reviewHolding,analyseFrame:(bars,style)=>analyse(bars,style),fetchMarket:async(_position,timeframe)=>{
+    calls++;
+    const end=Date.parse('2026-10-30T01:00:00Z')/1000,step=timeframe==='1day'?86400:14400;
+    const bars=Array.from({length:230},(_,i)=>({time:end-(229-i)*step,open:19+i/230,high:20+i/230,low:18+i/230,close:19.1+i/230,volume:100000+i}));
+    return {bars,meta:{provider:'yahoo',symbol:'1155.KL',currency:'MYR',interval:timeframe,completedCandles:true,timezone:'Asia/Kuala_Lumpur',fetchedAt:'2026-11-01T11:00:00Z'}};
+  }}),saved=s.workspace.controller.savePosition(lot({entryPrice:22,stopPrice:21,target1:25,target2:30,thesis:'<script>private thesis</script>'})),before=JSON.stringify(s.workspace.getBook());
+  s.root.handlers.click(action({holdingAction:'analyse',id:saved.id}));
+  for(let attempt=0;attempt<10&&s.workspace.controller.getState().active;attempt++)await new Promise(setImmediate);
+  const html=s.get('holdingReview').innerHTML;
+  assert.match(html,/Cut loss — review exit/);assert.match(html,/Why this response\?/);assert.match(html,/What would change this view\?/);assert.match(html,/MYR 21/);
+  assert.match(html,/Common scenarios/);assert.match(html,/Not evaluated/);assert.match(html,/Financial statements, valuation/);assert.match(html,/SMA20/);assert.match(html,/2026-10-30/);
+  assert.match(html,/Detailed technical evidence and data checks/);assert.doesNotMatch(html,/<script>/);assert.match(html,/&lt;script&gt;private thesis/);
+  assert.equal(JSON.stringify(s.workspace.getBook()),before);assert.equal(calls,2);
+});
 
 test('sale editor corrects an existing sale and requires two explicit steps to undo it',t=>{
   const s=mount(t),saved=s.workspace.controller.savePosition(lot()),sold=s.workspace.controller.recordExit(saved.id,{date:'2020-01-03',quantity:100,price:11,fees:2}),saleId=sold.exits[0].id;

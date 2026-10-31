@@ -1,6 +1,14 @@
-# BursaQuant — Stock Research Terminal (v0.7.1 trial)
+# BursaQuant — Stock Research Terminal (v0.7.2 trial)
 
 BursaQuant is a lightweight stock-research dashboard for US and Bursa Malaysia markets. It combines real OHLCV data with transparent technical rules, conditional entry/stop/TP scenarios and configurable position-risk calculations.
+
+## New in v0.7.2: explained holding guidance
+
+A holding review now leads with **suggested response → reasons → what would change the view**. It distinguishes cutting an estimated loss from protecting an estimated gain when your recorded stop is breached. A reached target suggests taking profit only when the remaining position has a positive estimated result after allocated entry fees; otherwise it is a planned-exit review. No stop, target, sale percentage or order is invented.
+
+Expandable scenarios cover protective stops, targets, technical hold conditions, weakening/conflicting evidence, estimated chart support and data gaps. Unconnected news, fundamentals, portfolio exposure, time limits and trailing rules remain explicitly not evaluated. The existing source/freshness gates and decision order are preserved: recorded stop/targets first, then SMA20/SMA50 trend and MACD across the selected style's timeframes. Indicator-rating weights remain separate. This is a finite technical checklist, not an assessment of every possible situation. Read [HOLDINGS-START-HERE.md](HOLDINGS-START-HERE.md) for the exact criteria and what happens after analysis.
+
+The release passes 249 automated tests, including stop/target priority, profit-versus-loss wording, conflicting evidence, unavailable inputs and the complete holding-review rendering flow. These checks validate implementation, not profitable trading performance.
 
 ## New in v0.7.1: add a holding from analysis
 
