@@ -32,6 +32,32 @@ The review can flag a protective stop breached on the reference close, a target 
 
 Changing trading style does not automatically move your stop or extend your target. Long-term technical readings cannot verify the company's business outlook, valuation or your investment thesis; review financial statements and announcements separately. No AI account is required.
 
+## How the suggested response is chosen
+
+The report starts with a conditional suggested response, measured reasons and what would change the view. The existing deterministic rules are applied in this order:
+
+| Priority | Criteria | Suggested response |
+| --- | --- | --- |
+| Data gate | Invalid holding, missing/stale daily anchor or unsupported reference | No supported recommendation |
+| Closed record | No remaining shares | Position closed |
+| Protective stop | Reference close at or below your recorded stop | Cut loss / protect profit / review planned exit, depending on estimated remaining P/L |
+| Recorded target | Reference close at or above target 1 or 2 | Consider taking profit if estimated P/L is positive; otherwise review planned exit |
+| Missing risk plan | No numeric protective stop recorded | Complete the risk plan |
+| Missing context | Selected style's second timeframe unavailable | Wait / review — evidence incomplete |
+| Weak context | Context timeframe has a bearish moving-average trend | Reassess the holding |
+| Aligned technical case | Both selected trends bullish, neither MACD histogram negative | Hold while conditions remain intact |
+| Other combinations | Conflicting or mixed technical evidence | Wait / review — evidence mixed |
+
+Bullish trend means `close > SMA20 > SMA50`; bearish means `close < SMA20 < SMA50`. MACD histogram describes the difference between the MACD line and its signal line; a negative reading prevents the technical-hold classification. RSI, ATR, RVOL, SMA200 and estimated support/resistance add context but do not determine that current classification. Your configurable stock-rating weights are a separate checklist. A loss relative to entry alone does not trigger a cut-loss response.
+
+Open **Common scenarios** for the trigger and conditional response for stops, targets, technical strength, estimated support, weakening/conflicting evidence and missing history. **Condition met** refers only to the displayed reference and evidence. Unavailable inputs are **Not evaluated**. Estimated chart support never replaces your entered stop. Time-based exits, trailing formulas and partial-sale percentages are not inferred from the style; record/apply your own rules.
+
+This covers common technical situations, not every possible event. Fundamentals, valuation, company news, announcements, portfolio exposure, cash needs, spread and broker execution are not connected. They remain missing information, not neutral or positive evidence.
+
+## What happens after analysis
+
+The system displays the dated review and uses its reference close for indicative open P/L. You review the reasons, verify current broker prices and company information, and decide what to do. It does not place orders, sell shares, move your stop, record a sale, continuously monitor the position or send alerts. Enter a sale only after you make the actual or paper execution. Refresh the analysis after a changed plan or new information; reviews expire after 30 minutes and when the holding or gateway changes.
+
 ## Record sales and review results
 
 Record a sale with its actual date, quantity, price and fees. A partial sale reduces the open quantity; a full sale closes the record. The tracker allocates entry fees proportionally between sold and remaining shares. Realised P/L uses recorded sale proceeds and costs. Open P/L uses the last analysed close, deducts allocated entry fees and excludes future exit costs. No quote means no marked open P/L.
