@@ -7,6 +7,17 @@ import {mountIpoWorkspace} from './ipo.js';
 import {validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings} from './holdings-model.js';
 import {HOLDING_STYLES,reviewHolding} from './holding-review.js';
 import {mountHoldingsWorkspace} from './holdings-ui.js';
+function analysisHoldingDraft(){
+ const instrumentType=String(lastProviderMeta?.instrumentType||'').toUpperCase();
+ if(!['Stock','ETF'].includes(symbol.type)||(instrumentType&&!['EQUITY','ETF'].includes(instrumentType)))return null;
+ const assetType=symbol.type==='ETF'||instrumentType==='ETF'?'ETF':'Stock';
+ const item=screenInstrument({...symbol,type:assetType});if(!item)return null;
+ return {symbol:item.symbol,market:item.market,assetType,style:({intraday:'short',swing:'short',medium:'swing',invest:'long'})[style]||'swing',tradeType:demoMode||source==='SIMULATED DEMO'?'paper':'actual'};
+}
+function updateHoldingShortcut(){
+ const button=$('addHoldingFromAnalysis');if(!button)return;
+ button.disabled=!analysisHoldingDraft();button.title=button.disabled?'Holdings support ordinary stocks and ETFs.':'Open an unsaved holding draft; enter your actual broker execution details.';
+}
 function registerHoldings(){
  holdingsWorkspace=mountHoldingsWorkspace($('holdingsWorkspace'),{
    model:{validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings},
@@ -16,6 +27,10 @@ function registerHoldings(){
    fetchMarket:(item,interval)=>researchGatewayFetch(`/market?market=${encodeURIComponent(item.market)}&symbol=${encodeURIComponent(item.symbol)}&interval=${encodeURIComponent(interval)}&provider=${encodeURIComponent(dataProvider)}&limit=500`),
    analyseFrame:(bars,engineStyle)=>analyse(bars,engineStyle,ratingStrategy)
  });
+ $('addHoldingFromAnalysis').onclick=()=>{
+   const draft=analysisHoldingDraft();if(!draft){notify('Holdings support ordinary stocks and ETFs only.');return;}
+   setPage('journal');holdingsWorkspace.beginDraft(draft);
+ };
 }
 function deepSelection(){
  const controls=screenControls(),screenSettings={minAverageVolume:controls.minAverageVolume,minAverageTurnover:symbol.market==='MY'?controls.turnoverMY:controls.turnoverUS,maxRangePct:controls.maxRangePct,cmfThreshold:controls.cmfThreshold};
@@ -132,7 +147,7 @@ function setSource(kind,asof=''){
   $('dataNotice').classList.toggle('actual',!demo&&!unavailable);$('dataNotice').classList.toggle('data-error',kind==='DATA UNAVAILABLE');
   $('dataNoticeText').textContent=demo?'SIMULATED SAMPLE · Generated candles; NOT historical quotes or current market prices.':kind==='CSV IMPORT'?'USER-SUPPLIED CSV · Verify timestamps, source, adjustments and selected candle interval.':kind==='YAHOO FINANCE'?'YAHOO FINANCE · Latest available historical candles · Delayed data may apply':kind==='TWELVE DATA API'?'TWELVE DATA · Provider candles · Check the candle timestamp':kind==='iSAHAM API'?'iSAHAM API · Provider candles · Freshness is not guaranteed':kind==='LOADING DATA'?'Loading provider candles…':'No provider analysis available. Check Risk & Data Settings or explicitly load demo data.';
   const fetched=lastProviderMeta?.fetchedAt||lastProviderMeta?.retrievedAt||'';
-  $('dataTimestamp').textContent=asof?`${candleTimestampLabel()}: ${exchangeTimestamp(asof)}${fetched?' · Fetched: '+exchangeTimestamp(fetched):''}`:'';renderProviderDetails();
+  $('dataTimestamp').textContent=asof?`${candleTimestampLabel()}: ${exchangeTimestamp(asof)}${fetched?' · Fetched: '+exchangeTimestamp(fetched):''}`:'';renderProviderDetails();updateHoldingShortcut();
 }
 function selectionKey(){return [symbol.market,symbol.symbol,timeframe,dataProvider,gatewayBase].join('|');}
 function clearAnalysis(message,kind='DATA UNAVAILABLE'){

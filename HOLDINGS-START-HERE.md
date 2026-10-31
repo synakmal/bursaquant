@@ -4,6 +4,8 @@ Open **Trades & Holdings** on [BursaQuant](https://synakmal.github.io/bursaquant
 
 ## Record a holding
 
+You can start from **Stock Analysis → + Add holding**. The unsaved form carries the ticker, market, stock/ETF type and trading style. Short Swing / Intraday maps to short term, Medium Swing to swing, and Long-Term Research to long term. Buy date, price, quantity, fees and plan levels stay blank for your own entries. Demo analysis opens a paper draft. If you have unsaved holding edits, save or cancel them before starting another draft. Clicking Add holding never saves a purchase by itself.
+
 1. Enter the market, ticker, buy date, entry price, quantity in individual shares/units and entry fees. Each record is one buy lot; record additional buys separately.
 2. Mark the record as an actual trade or a paper trade. Their results remain separate.
 3. Choose short term, swing or long term. Add your current protective stop, targets and the reason for holding the stock. Unknown plan values can stay blank; the review will identify the gaps.

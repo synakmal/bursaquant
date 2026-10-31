@@ -2,6 +2,8 @@
 
 Updated 1 November 2026. GitHub remains the source of truth; this personal site serves Bursa Malaysia and US stock research. Warrants are excluded. iSaham is optional and deferred while server access is unresolved.
 
+v0.7.1 adds a Stock Analysis **+ Add holding** shortcut. It carries the instrument and style into an unsaved manual form, preserves existing unsaved edits and requires actual execution details before saving. Demo drafts default to paper. The release passes 234 tests.
+
 ## v0.7: a focused manual trading record
 
 - Trades & Holdings records long stock/ETF buy lots, partial/full sales, actual/paper status, trading style and a manually entered risk/target plan.

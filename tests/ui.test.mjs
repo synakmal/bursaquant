@@ -272,3 +272,70 @@ test('holdings entry and backup preserve earlier journal records and exclude gat
   assert.match(reloaded.get('holdingsRows').innerHTML,/1155/);
   assert.equal(reloaded.storage.get('bq_trades'),JSON.stringify(legacy));
 });
+
+test('analysis shortcut opens an unsaved Bursa holding without copying quotes or modelled plans',async()=>{
+  const calls=[];const ui=boot({}, {protocol:'https:',fetch:async url=>{calls.push(url);return response(providerData(123));}});
+  await settle();ui.get('tickerInput').value='1155';await ui.get('loadTicker').dispatch('click');await settle();
+  const requestCount=calls.length;
+  await ui.get('addHoldingFromAnalysis').dispatch('click');
+  assert.equal(ui.get('page-journal').classList.contains('active'),true);
+  assert.equal(ui.get('holdingSymbol').value,'1155');assert.equal(ui.get('holdingMarket').value,'MY');assert.equal(ui.get('holdingAssetType').value,'Stock');
+  assert.equal(ui.get('holdingStyle').value,'short');assert.equal(ui.get('holdingTradeType').value,'actual');
+  for(const id of ['holdingEntryDate','holdingEntryPrice','holdingQuantity','holdingEntryFees','holdingStop','holdingTarget1','holdingTarget2','holdingOriginalStop'])assert.equal(ui.get(id).value,'',id+' must be entered or confirmed manually');
+  assert.equal(ui.storage.has('bq_holdings_v1'),false);assert.equal(calls.length,requestCount);
+});
+
+test('analysis shortcut carries ETF identity and maps each chart style to the holding horizon',async()=>{
+  for(const [chartStyle,holdingStyle]of [['intraday','short'],['swing','short'],['medium','swing'],['invest','long']]){
+    const ui=boot({}, {protocol:'https:',fetch:async()=>response(providerData())});await settle();
+    ui.get('tickerInput').value='SPY';await ui.get('loadTicker').dispatch('click');await settle();
+    ui.get('modeSelect').value=chartStyle;await ui.get('modeSelect').dispatch('change');
+    await ui.get('addHoldingFromAnalysis').dispatch('click');
+    assert.equal(ui.get('holdingSymbol').value,'SPY');assert.equal(ui.get('holdingMarket').value,'US');assert.equal(ui.get('holdingAssetType').value,'ETF');assert.equal(ui.get('holdingStyle').value,holdingStyle);
+    assert.equal(ui.storage.has('bq_holdings_v1'),false);
+  }
+});
+
+test('an explicit demo analysis creates only a paper draft and does not fetch or save a trade',async()=>{
+  let requests=0;const ui=boot({}, {protocol:'https:',fetch:async()=>{requests++;return response(providerData());}});await settle();
+  await ui.get('loadDemo').dispatch('click');assert.equal(ui.get('sourceLabel').textContent,'SIMULATED DEMO');
+  const before=requests;await ui.get('addHoldingFromAnalysis').dispatch('click');
+  assert.equal(ui.get('holdingTradeType').value,'paper');assert.equal(ui.get('holdingSymbol').value,'AAPL');assert.equal(ui.get('holdingEntryPrice').value,'');
+  assert.equal(ui.storage.has('bq_holdings_v1'),false);assert.equal(requests,before);
+});
+
+test('analysis drafts preserve saved trades and unsupported instruments cannot open a holding draft',async()=>{
+  const book={schemaVersion:1,positions:[{id:'original_lot',symbol:'1155',market:'MY',currency:'MYR',assetType:'Stock',tradeType:'actual',entryDate:'2020-01-02',entryPrice:10,quantity:100,entryFees:8,style:'swing',stopPrice:9,target1:12,target2:14,initialStopPrice:9,thesis:'Original saved thesis',notes:'',exits:[],createdAt:'',updatedAt:''}]};
+  const legacy=[{date:'2020-01-03',symbol:'AAPL',currency:'USD',entry:9,exit:10,quantity:1,fees:0,notes:'Earlier trade'}];
+  const saved={bq_holdings_v1:JSON.stringify(book),bq_trades:JSON.stringify(legacy)},ui=boot(saved);
+  await ui.get('addHoldingFromAnalysis').dispatch('click');
+  assert.equal(ui.storage.get('bq_holdings_v1'),saved.bq_holdings_v1);assert.equal(ui.storage.get('bq_trades'),saved.bq_trades);
+  for(const ticker of ['FBMKLCI','5357CC']){
+    await ui.all('.nav-item').find(button=>button.dataset.page==='analysis').dispatch('click');
+    ui.get('tickerInput').value=ticker;await ui.get('loadTicker').dispatch('click');
+    assert.equal(ui.get('addHoldingFromAnalysis').disabled,true);
+    await ui.get('addHoldingFromAnalysis').dispatch('click');
+    assert.equal(ui.get('page-analysis').classList.contains('active'),true);assert.equal(ui.get('holdingSymbol').value,'AAPL');
+    assert.equal(ui.storage.get('bq_holdings_v1'),saved.bq_holdings_v1);assert.equal(ui.storage.get('bq_trades'),saved.bq_trades);
+  }
+});
+
+test('analysis shortcut protects an unsaved holding draft until editing is explicitly cancelled',async()=>{
+  const ui=boot({}, {protocol:'https:',fetch:async()=>response(providerData())});await settle();
+  await ui.get('addHoldingFromAnalysis').dispatch('click');
+  const draft={holdingEntryDate:'2026-10-20',holdingEntryPrice:'123.45',holdingQuantity:'7',holdingNotes:'Keep this unsaved broker detail.'};
+  for(const [id,value]of Object.entries(draft))ui.get(id).value=value;
+  await ui.all('.nav-item').find(button=>button.dataset.page==='analysis').dispatch('click');
+  ui.get('tickerInput').value='MSFT';await ui.get('loadTicker').dispatch('click');await settle();
+  await ui.get('addHoldingFromAnalysis').dispatch('click');
+  assert.equal(ui.get('holdingSymbol').value,'AAPL');
+  for(const [id,value]of Object.entries(draft))assert.equal(ui.get(id).value,value);
+  assert.match(ui.get('holdingsStatus').textContent,/unsaved holding details/i);
+  assert.equal(ui.storage.has('bq_holdings_v1'),false);
+  await ui.get('holdingCancelEdit').dispatch('click');
+  await ui.all('.nav-item').find(button=>button.dataset.page==='analysis').dispatch('click');
+  await ui.get('addHoldingFromAnalysis').dispatch('click');
+  assert.equal(ui.get('holdingSymbol').value,'MSFT');assert.equal(ui.get('holdingMarket').value,'US');
+  for(const id of Object.keys(draft))assert.equal(ui.get(id).value,'');
+  assert.equal(ui.storage.has('bq_holdings_v1'),false);
+});
