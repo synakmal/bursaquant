@@ -786,11 +786,602 @@ function mountIpoWorkspace(rootElement){
 
 return {safeIpoSourceUrl,validateIpoDossier,calculateIpoMetrics,compareIpoPeers,parseIpoImport,mountIpoWorkspace};
 })();
+const BQHoldingsModel=(()=>{
+/** Manual long-only share lots. No broker, quote fetch, FX conversion or storage. */
+const HOLDINGS_LIMITS=Object.freeze({maxPositions:500,maxExitsPerPosition:200,maxBackupBytes:2000000,maxQuantity:1000000000,maxPrice:1000000000,maxFees:1000000000000,maxNotional:1000000000000000});
+const holdingObject=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+const holdingFinite=value=>typeof value==='number'&&Number.isFinite(value);
+const holdingRound=value=>Number.isFinite(value)?Number(value.toFixed(10)):null;
+const holdingBytes=value=>new TextEncoder().encode(value).length;
+const holdingToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kuala_Lumpur',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+
+function holdingText(value,name,max,fallback=''){
+  const text=value??fallback;
+  if(typeof text!=='string'||text.length>max)throw new Error(`${name} must be text with at most ${max} characters.`);
+  return text.trim();
+}
+function holdingId(value,name,required=false){
+  const id=holdingText(value,name,80);
+  if((required&&!id)||(id&&!/^[A-Za-z0-9_-]{1,80}$/.test(id)))throw new Error(`${name} must be a unique identifier using letters, numbers, underscores or hyphens.`);
+  return id;
+}
+function holdingNumber(value,name,{optional=false,min=0,max=HOLDINGS_LIMITS.maxNotional,integer=false,fallback}={}){
+  if(value===undefined&&fallback!==undefined)value=fallback;
+  if(value===null||value===undefined||(typeof value==='string'&&!value.trim())){
+    if(optional)return null;
+    throw new Error(`${name} is required.`);
+  }
+  if(!['number','string'].includes(typeof value)||!Number.isFinite(Number(value)))throw new Error(`${name} must be a finite number.`);
+  const number=Number(value);
+  if(number<min||number>max||(integer&&!Number.isSafeInteger(number)))throw new Error(`${name} must be ${integer?'a whole number ':''}between ${min} and ${max}.`);
+  return number;
+}
+function holdingDate(value,name,{optional=false,today}={}){
+  const raw=holdingText(value,name,10);
+  if(optional&&!raw)return '';
+  const millis=Date.parse(raw+'T00:00:00Z');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(raw)||!Number.isFinite(millis)||new Date(millis).toISOString().slice(0,10)!==raw||raw<'1900-01-01')throw new Error(`${name} must be a valid calendar date.`);
+  if(today&&raw>today)throw new Error(`${name} cannot be in the future.`);
+  return raw;
+}
+function holdingTimestamp(value,name){
+  const raw=holdingText(value,name,40);
+  if(!raw)return '';
+  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(raw)||!Number.isFinite(Date.parse(raw)))throw new Error(`${name} must be a UTC timestamp.`);
+  holdingDate(raw.slice(0,10),name);
+  return new Date(raw).toISOString();
+}
+function holdingTodayOption(today){return holdingDate(today??holdingToday(),'Today');}
+
+/** Normalise a single buy lot. Empty IDs are allowed before the UI first saves it. */
+function validatePosition(input,{today}={}){
+  if(!holdingObject(input))throw new Error('A holding must be an object.');
+  today=holdingTodayOption(today);
+  const rawSymbol=holdingText(input.symbol,'Symbol',32).toUpperCase();
+  const market=input.market??(/^(?:\d{4})(?:\.KL)?$/.test(rawSymbol)?'MY':'US');
+  if(!['MY','US'].includes(market))throw new Error('Choose Bursa Malaysia or US.');
+  const symbol=market==='MY'?rawSymbol.replace(/\.KL$/,''):rawSymbol.replace(/\./g,'-');
+  if(market==='MY'&&!/^\d{4}$/.test(symbol))throw new Error('Bursa holdings require a four-digit ordinary-share or ETF code. Warrants are not supported.');
+  if(market==='US'&&(!/^[A-Z][A-Z0-9.-]{0,14}$/.test(symbol)||/\.KL$/.test(rawSymbol)||/[-.](?:W|WS|WT|U|R)$/.test(symbol)))throw new Error('Enter a supported US stock or ETF ticker. Warrants, rights and units are not supported.');
+  const currency=market==='MY'?'MYR':'USD';
+  if(input.currency!==undefined&&input.currency!==currency)throw new Error('The holding currency must match its selected market.');
+  const assetType=input.assetType??'Stock',style=input.style??'swing',tradeType=input.tradeType??'actual';
+  if(!['Stock','ETF'].includes(assetType))throw new Error('Holdings support ordinary stocks and ETFs only.');
+  if(!['short','swing','long'].includes(style))throw new Error('Choose short, swing or long trading style.');
+  if(!['actual','paper'].includes(tradeType))throw new Error('Choose actual or paper trade.');
+  const position={id:holdingId(input.id,'Holding ID'),symbol,market,currency,assetType,
+    entryDate:holdingDate(input.entryDate,'Entry date',{today}),
+    entryPrice:holdingNumber(input.entryPrice,'Entry price',{min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}),
+    quantity:holdingNumber(input.quantity,'Quantity',{min:1,max:HOLDINGS_LIMITS.maxQuantity,integer:true}),
+    entryFees:holdingNumber(input.entryFees,'Entry fees',{min:0,max:HOLDINGS_LIMITS.maxFees,fallback:0}),style,tradeType,
+    stopPrice:holdingNumber(input.stopPrice,'Stop price',{optional:true,min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}),
+    target1:holdingNumber(input.target1,'First target',{optional:true,min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}),
+    target2:holdingNumber(input.target2,'Second target',{optional:true,min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}),
+    initialStopPrice:null,
+    thesis:holdingText(input.thesis,'Thesis',2000),notes:holdingText(input.notes,'Notes',2000),
+    exits:[],createdAt:holdingTimestamp(input.createdAt,'Created timestamp'),updatedAt:holdingTimestamp(input.updatedAt,'Updated timestamp')};
+  // The UI preserves this original baseline when the current stop is edited.
+  // Explicit null records that the original protective stop was not supplied.
+  position.initialStopPrice=Object.hasOwn(input,'initialStopPrice')?holdingNumber(input.initialStopPrice,'Original stop price',{optional:true,min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}):position.stopPrice;
+  if(position.target1!==null&&position.target2!==null&&position.target2<=position.target1)throw new Error('The second target must be above the first target.');
+  if(position.entryPrice*position.quantity+position.entryFees>HOLDINGS_LIMITS.maxNotional)throw new Error('The holding cost exceeds the supported amount.');
+  if(input.exits!==undefined&&!Array.isArray(input.exits))throw new Error('Exits must be a list.');
+  if((input.exits?.length||0)>HOLDINGS_LIMITS.maxExitsPerPosition)throw new Error('Use at most 200 exits per buy lot.');
+  const ids=new Set();let sold=0;
+  position.exits=(input.exits||[]).map(exit=>{
+    if(!holdingObject(exit))throw new Error('Each exit must be an object.');
+    const clean={id:holdingId(exit.id,'Exit ID'),date:holdingDate(exit.date,'Exit date',{today}),quantity:holdingNumber(exit.quantity,'Exit quantity',{min:1,max:HOLDINGS_LIMITS.maxQuantity,integer:true}),price:holdingNumber(exit.price,'Exit price',{min:0,max:HOLDINGS_LIMITS.maxPrice}),fees:holdingNumber(exit.fees,'Exit fees',{min:0,max:HOLDINGS_LIMITS.maxFees,fallback:0})};
+    if(clean.date<position.entryDate)throw new Error('An exit cannot be earlier than the entry date.');
+    if(clean.id&&ids.has(clean.id))throw new Error('Exit IDs must be unique within each holding.');
+    ids.add(clean.id);sold+=clean.quantity;
+    if(sold>position.quantity)throw new Error('Exit quantity exceeds the shares held.');
+    if(clean.price*clean.quantity+clean.fees>HOLDINGS_LIMITS.maxNotional)throw new Error('The exit value exceeds the supported amount.');
+    return clean;
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+  return position;
+}
+
+/** Values remain in the lot's own quote currency; no FX conversion is inferred. */
+function positionTotals(input,{price=null,today}={}){
+  const position=validatePosition(input,{today});
+  if(price!==null&&price!==undefined&&(!holdingFinite(price)||price<=0||price>HOLDINGS_LIMITS.maxPrice))throw new Error('The reference price must be a positive finite number or unavailable.');
+  const originalQuantity=position.quantity,soldQuantity=position.exits.reduce((total,exit)=>total+exit.quantity,0),remainingQuantity=originalQuantity-soldQuantity;
+  const entryCost=position.entryPrice*originalQuantity+position.entryFees;
+  const allocatedEntryFees=position.entryFees*soldQuantity/originalQuantity,remainingEntryFees=position.entryFees-allocatedEntryFees;
+  const exitFees=position.exits.reduce((total,exit)=>total+exit.fees,0);
+  const realizedPnlGross=position.exits.reduce((total,exit)=>total+(exit.price-position.entryPrice)*exit.quantity,0);
+  const realizedPnl=realizedPnlGross-allocatedEntryFees-exitFees;
+  const remainingCostBasis=position.entryPrice*remainingQuantity+remainingEntryFees;
+  const hasPrice=holdingFinite(price)&&price>0;
+  const marketValue=remainingQuantity===0?0:hasPrice?price*remainingQuantity:null;
+  const unrealizedPnlGross=remainingQuantity===0?0:hasPrice?(price-position.entryPrice)*remainingQuantity:null;
+  // Remaining purchase fees are known. Future exit fees, taxes and slippage are
+  // unknown and deliberately excluded from this indicative unrealised value.
+  const unrealizedPnl=marketValue===null?null:marketValue-remainingCostBasis;
+  const initialRisk=position.initialStopPrice!==null&&position.initialStopPrice<position.entryPrice?(position.entryPrice-position.initialStopPrice)*originalQuantity+position.entryFees:null;
+  return {status:remainingQuantity===0?'closed':'open',originalQuantity,soldQuantity,remainingQuantity,
+    entryCost:holdingRound(entryCost),allocatedEntryFees:holdingRound(allocatedEntryFees),remainingEntryFees:holdingRound(remainingEntryFees),remainingCostBasis:holdingRound(remainingCostBasis),exitFees:holdingRound(exitFees),
+    realizedPnlGross:holdingRound(realizedPnlGross),realizedPnl:holdingRound(realizedPnl),marketValue:marketValue===null?null:holdingRound(marketValue),unrealizedPnlGross:unrealizedPnlGross===null?null:holdingRound(unrealizedPnlGross),unrealizedPnl:unrealizedPnl===null?null:holdingRound(unrealizedPnl),
+    totalPnl:unrealizedPnl===null?null:holdingRound(realizedPnl+unrealizedPnl),breakEvenPrice:remainingQuantity>0?holdingRound(remainingCostBasis/remainingQuantity):null,initialRisk:initialRisk===null?null:holdingRound(initialRisk),
+    realizedPnlPct:soldQuantity>0?holdingRound(realizedPnl/(position.entryPrice*soldQuantity+allocatedEntryFees)*100):null,
+    unrealizedPnlPct:unrealizedPnl===null||remainingQuantity===0?null:holdingRound(unrealizedPnl/remainingCostBasis*100),
+    realizedRMultiple:remainingQuantity===0&&initialRisk>0?holdingRound(realizedPnl/initialRisk):null};
+}
+
+/** Closed allowlist prevents unrelated keys or credentials entering a backup. */
+function validateHoldingsBook(input,{today}={}){
+  if(!holdingObject(input)||input.schemaVersion!==1||!Array.isArray(input.positions))throw new Error('Expected a version 1 holdings backup with a positions list.');
+  if(input.positions.length>HOLDINGS_LIMITS.maxPositions)throw new Error('Use at most 500 buy lots.');
+  today=holdingTodayOption(today);
+  const ids=new Set(),exitIds=new Set();
+  const positions=input.positions.map(raw=>{
+    const position=validatePosition(raw,{today});
+    if(!position.id||ids.has(position.id))throw new Error('Every saved holding needs a unique non-empty ID.');
+    ids.add(position.id);
+    for(const exit of position.exits){if(!exit.id||exitIds.has(exit.id))throw new Error('Every saved exit needs a unique non-empty ID.');exitIds.add(exit.id);}
+    return position;
+  });
+  const book={schemaVersion:1,positions};
+  if(holdingBytes(JSON.stringify(book))>HOLDINGS_LIMITS.maxBackupBytes)throw new Error('Holdings data exceeds the 2 MB limit.');
+  return book;
+}
+
+function parseHoldingsBackup(text,options={}){
+  if(typeof text!=='string'||text.length>HOLDINGS_LIMITS.maxBackupBytes||holdingBytes(text)>HOLDINGS_LIMITS.maxBackupBytes)throw new Error('Holdings backup exceeds the 2 MB limit.');
+  let input;try{input=JSON.parse(text);}catch{throw new Error('Choose a valid holdings JSON backup.');}
+  return validateHoldingsBook(input,options);
+}
+
+function serializeHoldingsBook(book,options={}){
+  const text=JSON.stringify(validateHoldingsBook(book,options),null,2);
+  if(holdingBytes(text)>HOLDINGS_LIMITS.maxBackupBytes)throw new Error('Holdings backup exceeds the 2 MB limit.');
+  return text;
+}
+
+/** Summary groups paper/actual and MYR/USD separately; quote totals are partial. */
+function summarizeHoldings(book,{quotes={},today}={}){
+  const valid=validateHoldingsBook(book,{today});
+  const blank=()=>({openPositions:0,closedPositions:0,remainingCostBasis:0,realizedPnl:0,quotedOpenPositions:0,unquotedOpenPositions:0,quotedMarketValue:0,quotedUnrealizedPnl:0});
+  const summary={actual:{MYR:blank(),USD:blank()},paper:{MYR:blank(),USD:blank()}};
+  for(const position of valid.positions){
+    const value=quotes?.[position.id],price=holdingFinite(value)&&value>0&&value<=HOLDINGS_LIMITS.maxPrice?value:null;
+    const totals=positionTotals(position,{price,today}),group=summary[position.tradeType][position.currency];
+    group.realizedPnl+=totals.realizedPnl;group.remainingCostBasis+=totals.remainingCostBasis;
+    if(totals.status==='closed')group.closedPositions++;
+    else {group.openPositions++;if(price===null)group.unquotedOpenPositions++;else {group.quotedOpenPositions++;group.quotedMarketValue+=totals.marketValue;group.quotedUnrealizedPnl+=totals.unrealizedPnl;}}
+  }
+  for(const types of Object.values(summary))for(const group of Object.values(types))for(const field of ['remainingCostBasis','realizedPnl','quotedMarketValue','quotedUnrealizedPnl'])group[field]=holdingRound(group[field]);
+  return summary;
+}
+
+/** Legacy closed trades remain legacy records: their recording date is not an execution date. */
+function normalizeLegacyTrades(input){
+  if(!Array.isArray(input))throw new Error('Legacy trades must be a list.');
+  if(input.length>10000)throw new Error('Legacy trade list exceeds the supported size.');
+  const records=[],rejected=[];
+  for(const [index,item]of input.entries()){
+    try{
+      if(!holdingObject(item))throw new Error('Trade must be an object.');
+      const symbol=holdingText(item.symbol,'Symbol',32).toUpperCase(),currency=item.currency;
+      if(!symbol||!['MYR','USD'].includes(currency))throw new Error('Legacy symbol or currency is missing.');
+      const entry=holdingNumber(item.entry,'Entry price',{min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}),exit=holdingNumber(item.exit,'Exit price',{min:0,max:HOLDINGS_LIMITS.maxPrice}),quantity=holdingNumber(item.quantity,'Quantity',{min:1,max:HOLDINGS_LIMITS.maxQuantity,integer:true}),fees=holdingNumber(item.fees,'Fees',{min:0,max:HOLDINGS_LIMITS.maxFees,fallback:0});
+      const recordedAt=holdingText(item.date,'Recorded date',40);
+      if(recordedAt&&!Number.isFinite(Date.parse(recordedAt)))throw new Error('Legacy recorded date is invalid.');
+      records.push({id:'legacy_'+index,symbol,currency,entry,exit,quantity,fees,notes:holdingText(item.notes,'Notes',2000),recordedAt,entryDate:null,exitDate:null,realizedPnl:holdingRound((exit-entry)*quantity-fees)});
+    }catch(error){rejected.push({index,reason:error.message});}
+  }
+  return {records,rejected};
+}
+
+return {HOLDINGS_LIMITS,validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings,normalizeLegacyTrades};
+})();
+const BQHoldingReview=(()=>{
+/**
+ * Conditional review of a manually recorded long stock/ETF position.
+ * Calculations and provider requests are supplied by the caller. No orders,
+ * model calls, stop changes or target changes occur in this module.
+ *
+ * Stop execution is never inferred from a candle or guaranteed at the stop:
+ * https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-bulletins-15
+ */
+const HOLDING_STYLES=Object.freeze({
+  short:Object.freeze({id:'short',label:'Short term · days',engineStyle:'swing',timeframes:Object.freeze(['1day','1h'])}),
+  swing:Object.freeze({id:'swing',label:'Swing · days to weeks',engineStyle:'medium',timeframes:Object.freeze(['1day','4h'])}),
+  long:Object.freeze({id:'long',label:'Long term · months+',engineStyle:'invest',timeframes:Object.freeze(['1day','1week'])})
+});
+const holdingNumber=value=>typeof value==='number'&&Number.isFinite(value);
+const holdingText=(value,length=300)=>typeof value==='string'?value.slice(0,length):'';
+const holdingRound=value=>holdingNumber(value)?Number(value.toFixed(6)):null;
+const holdingLast=values=>Array.isArray(values)?values.at(-1):null;
+const holdingDate=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
+const holdingIso=seconds=>holdingNumber(seconds)&&seconds>0&&seconds<8640000000000?new Date(seconds*1000).toISOString():null;
+const holdingTicker=(value,market)=>String(value||'').toUpperCase().replace(market==='MY'?/\.KL$/:/\./g,market==='MY'?'':'-');
+
+function holdingExchangeDate(seconds,timezone){
+  try{
+    const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(seconds*1000)).filter(part=>part.type!=='literal').map(part=>[part.type,part.value]));
+    return parts.year+'-'+parts.month+'-'+parts.day;
+  }catch{return null;}
+}
+
+function holdingFrame(input,timeframe,position,nowSeconds){
+  const result={timeframe,status:'unavailable',reason:'This timeframe was not supplied.',provider:null,timezone:null,completedCandles:false,completionInferred:false,price:null,lastCandle:null,fetchedAt:null,trend:null,indicators:null,levels:null,warnings:[]};
+  const reject=(status,reason)=>({...result,status,reason});
+  if(!input)return result;
+  if(input.error)return reject('error',holdingText(typeof input.error==='string'?input.error:input.error.message,350)||'The provider request failed.');
+  const {bars,meta,analysis}=input;
+  if(!meta||!['yahoo','twelvedata','isaham'].includes(meta.provider))return reject('unverified','A recognised provider source is required. Demo and imported candles cannot review a holding.');
+  result.provider=meta.provider;
+  if(meta.interval!==timeframe)return reject('invalid','The provider interval does not match the selected holding style.');
+  if(meta.completedCandles!==true)return reject('incomplete','Completed provider candles have not been established.');
+  result.completedCandles=true;result.completionInferred=meta.provider==='yahoo'||meta.completionInferred===true;
+  if(!meta.symbol||holdingTicker(meta.symbol,position.market)!==holdingTicker(position.symbol,position.market))return reject('invalid','The provider symbol does not match this holding.');
+  if(meta.currency&&meta.currency!==position.currency)return reject('invalid','The provider currency does not match this holding.');
+  if(meta.instrumentType&&!['EQUITY','ETF'].includes(String(meta.instrumentType).toUpperCase()))return reject('unsupported','The provider identifies an instrument outside this stock/ETF model.');
+  if(!Array.isArray(bars)||bars.length<55||bars.length>5000)return reject('insufficient','At least 55 valid completed candles are required for this timeframe.');
+  let previous=0;
+  for(const bar of bars){
+    if(!bar||!['time','open','high','low','close'].every(key=>holdingNumber(bar[key]))||bar.time<=previous||bar.time<=0||bar.open<=0||bar.close<=0||bar.low<=0||bar.high<Math.max(bar.open,bar.close,bar.low)||bar.low>Math.min(bar.open,bar.close)||(bar.volume!==undefined&&(!holdingNumber(bar.volume)||bar.volume<0)))return reject('invalid','The history contains invalid, duplicated or unordered candles.');
+    previous=bar.time;
+  }
+  const last=bars.at(-1),maxAge=timeframe==='1week'?14*86400:7*86400;
+  result.lastCandle=holdingIso(last.time);
+  result.timezone=holdingText(meta.timezone,80)|| (position.market==='MY'?'Asia/Kuala_Lumpur':'America/New_York');
+  if(!result.lastCandle||last.time>nowSeconds)return reject('invalid','A provider candle has a future or unsupported timestamp.');
+  if(nowSeconds-last.time>maxAge)return reject('stale',`The latest ${timeframe==='1week'?'weekly bar start is older than 14':'bar start is older than seven'} calendar days. Refresh the history before interpreting it.`);
+  if(!holdingExchangeDate(last.time,result.timezone))return reject('invalid','The exchange timezone is not usable.');
+  if(!analysis||analysis.price!==last.close||!Array.isArray(analysis.candles)||analysis.candles.length!==bars.length||analysis.candles.some((bar,index)=>!bar||['time','open','high','low','close','volume'].some(key=>(bar[key]??null)!==(bars[index][key]??null))))return reject('invalid','The supplied technical calculations do not match this history.');
+  if(!['Bullish','Bearish','Mixed / Range'].includes(analysis.trend)||!holdingNumber(holdingLast(analysis.sma20))||!holdingNumber(holdingLast(analysis.sma50)))return reject('insufficient','Required moving-average evidence is missing.');
+  const ma20=holdingLast(analysis.sma20),ma50=holdingLast(analysis.sma50),expectedTrend=last.close>ma20&&ma20>ma50?'Bullish':last.close<ma20&&ma20<ma50?'Bearish':'Mixed / Range';
+  if(analysis.trend!==expectedTrend)return reject('invalid','The technical trend label conflicts with the supplied price and moving averages.');
+  result.status='available';result.reason='Provider source, interval, completion, symbol, history and freshness checks passed.';
+  result.price=last.close;result.trend=analysis.trend;result.fetchedAt=holdingText(meta.fetchedAt||meta.retrievedAt,60)||null;result.barsUsed=bars.length;
+  result.indicators={sma20:holdingRound(holdingLast(analysis.sma20)),sma50:holdingRound(holdingLast(analysis.sma50)),sma200:holdingRound(holdingLast(analysis.sma200)),rsi14:holdingRound(analysis.rsi),macdHistogram:holdingNumber(analysis.macd)?analysis.macd:null,atr14:holdingRound(analysis.atr),rvol:holdingRound(analysis.rvol)};
+  result.levels={support:holdingNumber(analysis.levels?.support)&&analysis.levels.support>0?holdingRound(analysis.levels.support):null,resistance:holdingNumber(analysis.levels?.resistance)&&analysis.levels.resistance>0?holdingRound(analysis.levels.resistance):null};
+  if(result.completionInferred)result.warnings.push('Candle completion is inferred by the gateway, not guaranteed by Yahoo or the provider.');
+  if(result.indicators.sma200===null)result.warnings.push('SMA200 is unavailable; longer-term technical coverage is limited.');
+  if(analysis.hasVolume!==true)result.warnings.push('Reliable volume confirmation is unavailable.');
+  if(['1h','4h'].includes(timeframe))result.warnings.push('Intraday/session volume can vary by time of day and bar duration; RVOL is not normalised for those differences.');
+  if(timeframe==='1week')result.warnings.push('Weekly candle timestamps are bar starts; up to 14 calendar days is allowed for this completed weekly context. Daily history supplies the position price reference.');
+  return result;
+}
+
+function holdingQuantities(position){
+  if(!holdingNumber(position.quantity)||!Number.isSafeInteger(position.quantity)||position.quantity<=0||!holdingNumber(position.entryPrice)||position.entryPrice<=0||!holdingNumber(position.entryFees)||position.entryFees<0)return null;
+  const exits=position.exits??[];
+  if(!Array.isArray(exits))return null;
+  let sold=0;
+  for(const exit of exits){
+    if(!exit||!holdingNumber(exit.quantity)||!Number.isSafeInteger(exit.quantity)||exit.quantity<=0||!holdingNumber(exit.price)||exit.price<0||!holdingNumber(exit.fees)||exit.fees<0||!holdingDate(exit.date)||exit.date<position.entryDate)return null;
+    sold+=exit.quantity;
+  }
+  if(sold>position.quantity)return null;
+  return {remaining:position.quantity-sold,remainingEntryFees:position.entryFees*(position.quantity-sold)/position.quantity};
+}
+
+/** Use recorded plan thresholds and the selected style's latest completed close. */
+function reviewHolding({position,frames=[],generatedAt=new Date().toISOString()}={}){
+  const now=Date.parse(generatedAt);
+  if(!Number.isFinite(now))throw new Error('A valid holding-review generation timestamp is required.');
+  const chosen=HOLDING_STYLES[position?.style],profile=chosen||HOLDING_STYLES.swing;
+  const base={version:1,positionId:holdingText(position?.id,80),symbol:holdingText(position?.symbol,32),market:holdingText(position?.market,10),currency:holdingText(position?.currency,10),tradeType:position?.tradeType==='paper'?'paper':'actual',classification:'insufficient',label:'No conclusion',summary:'Valid position details and fresh completed daily history are required.',generatedAt:new Date(now).toISOString(),style:{...profile,timeframes:[...profile.timeframes]},priceReference:null,frames:[],evidence:[],risks:[],nextChecks:[],plan:{stopPrice:null,target1:null,target2:null,stopBreached:false,target1Reached:false,target2Reached:false},pnl:null,coverage:{available:0,required:profile.timeframes.length,missing:[],fundamentals:false,news:false,corporateActions:false}};
+  const riskNotes=['This review compares completed historical closes, not a live executable quote. A stop or target crossing does not establish an order fill.','A completed daily close supplies the full regular-session reference. Intraday context supplies the reference only when its exchange date is later than the completed daily candle. Displayed candle timestamps are bar starts, not exact trade or execution times.','Verify current broker quotes and announcements before deciding. Gaps, slippage and available liquidity can change an exit price.','P/L assumes your recorded quantity and entry cost reflect splits and other corporate actions. Broker records and these provider prices are not reconciled automatically.','Changing trading style never changes your recorded stop or targets. No averaging down or target extension is assumed.'];
+  const finish=(classification,label,summary)=>({...base,classification,label,summary});
+  if(!position||!chosen||!['MY','US'].includes(position.market)||position.currency!==(position.market==='MY'?'MYR':'USD')||!['Stock','ETF'].includes(position.assetType)||!holdingDate(position.entryDate)||!(/^[A-Z0-9][A-Z0-9.-]{0,31}$/i.test(position.symbol||'')))return finish('insufficient','No conclusion','Position details or trading style are invalid; review the manual record.');
+  const quantities=holdingQuantities(position);
+  if(!quantities)return finish('insufficient','No conclusion','Position quantity, entry costs or recorded exits are invalid; correct the manual record first.');
+  if(quantities.remaining===0)return finish('closed','Position closed','No remaining shares are recorded. Review the realised trade record instead of requesting a holding action.');
+  for(const key of ['stopPrice','target1','target2']){
+    const value=position[key];
+    if(value!==undefined&&value!==null&&(!holdingNumber(value)||value<=0))return finish('insufficient','No conclusion','A recorded stop or target is invalid; correct the manual plan first.');
+    base.plan[key]=holdingNumber(value)?value:null;
+  }
+  if(base.plan.target1!==null&&base.plan.target2!==null&&base.plan.target2<=base.plan.target1)return finish('insufficient','No conclusion','The second target must be above the first target. Correct the manual plan first.');
+  base.risks.push(...riskNotes);
+  const inputs=Array.isArray(frames)?frames:[];
+  base.frames=profile.timeframes.map(timeframe=>{const matches=inputs.filter(frame=>frame?.timeframe===timeframe);return holdingFrame(matches.length>1?{error:'Duplicate timeframe inputs were excluded.'}:matches[0],timeframe,position,now/1000);});
+  base.coverage.available=base.frames.filter(frame=>frame.status==='available').length;
+  base.coverage.missing=base.frames.filter(frame=>frame.status!=='available').map(frame=>`${frame.timeframe}: ${frame.reason}`);
+  const daily=base.frames.find(frame=>frame.timeframe==='1day'),context=base.frames.find(frame=>frame.timeframe!== '1day');
+  if(daily.status!=='available'){
+    base.nextChecks.push('Load fresh completed daily candles for this symbol before comparing the holding with a stop, target or profit/loss.');
+    return finish('insufficient','No conclusion','Fresh completed daily anchor history is unavailable. Other timeframes cannot substitute for that required history.');
+  }
+  // A current intraday close must not be hidden behind yesterday's daily close.
+  // On the same exchange date the completed daily bar covers the full regular
+  // session, so a later intraday start cannot replace that completed close.
+  // Weekly context never supplies the position price reference.
+  const dailyDate=holdingExchangeDate(Date.parse(daily.lastCandle)/1000,daily.timezone);
+  const eligibleIntraday=base.frames.filter(frame=>frame.status==='available'&&['1h','4h'].includes(frame.timeframe)&&holdingExchangeDate(Date.parse(frame.lastCandle)/1000,frame.timezone)>dailyDate).sort((a,b)=>Date.parse(b.lastCandle)-Date.parse(a.lastCandle));
+  const reference=eligibleIntraday[0]||daily;
+  const referenceDate=holdingExchangeDate(Date.parse(reference.lastCandle)/1000,reference.timezone);
+  const referenceLabel=reference.timeframe==='1day'?'daily':reference.timeframe.toUpperCase();
+  if(referenceDate<position.entryDate){
+    base.nextChecks.push('Wait for a completed reference candle dated on or after the recorded entry date, then analyse again.');
+    return finish('insufficient','No conclusion','The latest eligible completed reference candle predates your recorded entry date. It cannot describe this position after entry.');
+  }
+  if(position.entryDate>holdingExchangeDate(now/1000,reference.timezone))return finish('insufficient','No conclusion','The recorded entry date is in the future for this exchange. Correct the manual record.');
+  base.priceReference={price:reference.price,timeframe:reference.timeframe,lastCandle:reference.lastCandle,exchangeDate:referenceDate,timezone:reference.timezone,provider:reference.provider,fetchedAt:reference.fetchedAt,completionInferred:reference.completionInferred};
+  const price=reference.price,gross=(price-position.entryPrice)*quantities.remaining;
+  base.pnl={remainingQuantity:quantities.remaining,entryPrice:position.entryPrice,lastClose:price,unrealizedGross:holdingRound(gross),unrealizedAfterEntryFees:holdingRound(gross-quantities.remainingEntryFees),changePct:holdingRound((price/position.entryPrice-1)*100)};
+  base.evidence.push(`The latest eligible completed reference is the ${referenceLabel} close of ${price} ${position.currency}, for the candle beginning ${reference.lastCandle}.`,`The recorded entry is ${position.entryPrice} ${position.currency}; ${quantities.remaining} shares remain.`);
+  base.risks.push('Entry dates have day precision only. Exact execution time and intraday movement after the fill are not established. Unrealised P/L excludes future exit fees, taxes and slippage.');
+  if(base.plan.stopPrice!==null){base.plan.stopBreached=price<=base.plan.stopPrice;base.evidence.push(`Your recorded stop is ${base.plan.stopPrice} ${position.currency}; the ${referenceLabel} reference close is ${base.plan.stopBreached?'at or below':'above'} it.`);}
+  else base.risks.push('No protective stop is recorded. This review cannot establish that your position-risk plan remains intact.');
+  for(const key of ['target1','target2'])if(base.plan[key]!==null){base.plan[key+'Reached']=price>=base.plan[key];base.evidence.push(`Your recorded ${key==='target1'?'first':'second'} target is ${base.plan[key]} ${position.currency}; the ${referenceLabel} reference close is ${base.plan[key+'Reached']?'at or above':'below'} it.`);}
+  if(base.plan.target1===null&&base.plan.target2===null)base.risks.push('No profit-taking target is recorded. A target or discretionary exit rule must come from your own plan.');
+  if([base.plan.target1,base.plan.target2].some(target=>target!==null&&target<position.entryPrice+position.entryFees/position.quantity))base.risks.push('A recorded target is below the entry cost including buy fees. Reaching it does not necessarily produce a profit.');
+  for(const frame of base.frames.filter(frame=>frame.status==='available')){
+    base.evidence.push(`${frame.timeframe}: ${frame.trend} moving-average trend; MACD histogram ${frame.indicators.macdHistogram===null?'unavailable':frame.indicators.macdHistogram}.`);
+    base.risks.push(...frame.warnings.map(warning=>`${frame.timeframe}: ${warning}`));
+  }
+  base.nextChecks.push('Check current broker prices and the recorded stop/target conditions before acting.','Record any actual partial or full sale manually; this review never closes a holding or sends an order.');
+  if(profile.id==='long'){
+    base.risks.push('Financial statements, valuation, dividends and your investment thesis are not verified by this technical review. Technical strength alone cannot establish that a long-term investment thesis remains sound.');
+    base.nextChecks.push('For a long-term position, separately review the latest financial results and whether the original investment thesis has changed.');
+  }
+  if(base.plan.stopBreached){
+    base.nextChecks.unshift(`Your recorded stop condition has been breached on the ${referenceLabel} reference close. Review your exit plan promptly; switching style does not remove that recorded breach.`);
+    return finish('stop_breached','Stop breached — review exit',`The completed ${referenceLabel} reference close is at or below your recorded stop. Review the planned exit and current broker price; no stop fill or achievable exit price is assumed.`);
+  }
+  if(base.plan.target1Reached||base.plan.target2Reached){
+    base.nextChecks.unshift('Review the recorded target/exit rule and whether a partial or full exit was planned. Record an actual fill separately.');
+    return finish('target_reached',gross-quantities.remainingEntryFees>0?'Target reached — review taking profit':'Target reached — review planned exit',`The completed ${referenceLabel} reference close is at or above your recorded ${base.plan.target2Reached?'second':'first'} target. Review the planned exit decision; this does not establish that a target order filled.`);
+  }
+  if(base.plan.stopPrice===null)return finish('plan_incomplete','Risk plan incomplete','Add your own protective stop or explicit invalidation plan before treating a technical reading as a reason to keep holding. No stop has been invented.');
+  if(context?.status!=='available')return finish('mixed','Review / evidence incomplete',`Your recorded stop and targets have not been crossed on the ${referenceLabel} reference close, but the selected style has incomplete timeframe evidence. A hold condition cannot be confirmed.`);
+  const styleTrend=context.trend,negativeMomentum=base.frames.some(frame=>frame.status==='available'&&holdingNumber(frame.indicators.macdHistogram)&&frame.indicators.macdHistogram<0);
+  if(styleTrend==='Bearish'){
+    base.nextChecks.unshift('Review the weakening trend against the original thesis and your existing invalidation rule; do not widen the recorded stop automatically.');
+    return finish('review_risk','Review holding risk',`${context.timeframe} context for your ${profile.label.toLowerCase()} style has a bearish moving-average trend. The ${referenceLabel} reference close has not breached your recorded stop or reached a target; review the thesis and existing exit conditions.`);
+  }
+  if(daily.trend==='Bullish'&&styleTrend==='Bullish'&&!negativeMomentum)return finish('hold_conditions','Technical hold conditions intact',`The ${referenceLabel} reference close remains above your recorded stop and below any recorded targets. Both selected timeframes have bullish moving-average trends without a negative MACD histogram. Continue monitoring the existing plan; this is conditional technical evidence, not a forecast.`);
+  return finish('mixed','Review / evidence mixed',`Your recorded stop and targets have not been crossed on the ${referenceLabel} reference close, while trend or momentum evidence is mixed. Review the original thesis and wait for clearer evidence within your recorded risk plan.`);
+}
+
+return {HOLDING_STYLES,reviewHolding};
+})();
+const BQHoldingsUI=(()=>{
+// Manual holdings stay in browser storage. Only symbol/market leave for candles.
+const HOLDINGS_STORAGE_KEY='bq_holdings_v1';
+const holdingsEscape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+const holdingsNumber=(value,places=2)=>Number.isFinite(value)?value.toLocaleString('en-US',{maximumFractionDigits:places}):'Unavailable';
+const holdingsMoney=(value,currency)=>`${holdingsEscape(currency)} ${holdingsNumber(value,Number.isFinite(value)&&Math.abs(value)<1?4:2)}`;
+const holdingsCopy=value=>JSON.parse(JSON.stringify(value));
+const holdingsId=()=>globalThis.crypto?.randomUUID?.()||'holding_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);
+const holdingsToday=()=>{
+  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Kuala_Lumpur',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).filter(part=>part.type!=='literal').map(part=>[part.type,part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
+
+/** Controller is also usable without the DOM for persistence/race verification. */
+function createHoldingsController(deps){
+  const model=deps.model,storage=deps.storage||globalThis.localStorage;
+  const wait=deps.wait||((delay)=>new Promise(resolve=>setTimeout(resolve,delay)));
+  const now=()=>deps.now?.()??Date.now();
+  const timestamp=()=>new Date(now()).toISOString();
+  let book={schemaVersion:1,positions:[]},loadError='',unreadable='',listener=()=>{},active=null,sequence=0;
+  const reviews=new Map();
+  let connection=String(deps.getConnectionKey?.()||'');
+  const today=()=>deps.today?.()||holdingsToday();
+  const validate=value=>model.validateHoldingsBook(value,{today:today()});
+  try{const raw=storage?.getItem(HOLDINGS_STORAGE_KEY);if(raw){unreadable=raw;book=model.parseHoldingsBackup(raw,{today:today()});unreadable='';}}
+  catch{loadError='Saved holdings could not be read. Export a rescue copy before replacing this data with a valid backup.';}
+  const emit=()=>listener();
+  const position=id=>book.positions.find(item=>item.id===id);
+  const fingerprint=item=>JSON.stringify(item);
+  function invalidate(id){reviews.delete(id);if(active?.id===id)active.cancelled=true;}
+  function commit(next,{replaceUnreadable=false}={}){
+    if(loadError&&!replaceUnreadable)throw new Error(loadError);
+    const clean=validate(next),encoded=model.serializeHoldingsBook(clean);
+    if(!storage?.setItem)throw new Error('Browser storage is unavailable. The record has not been saved.');
+    try{storage.setItem(HOLDINGS_STORAGE_KEY,encoded);}catch{throw new Error('Browser storage could not save this change. Export a backup or free space; the previous records remain unchanged.');}
+    for(const [id,value]of reviews)if(!clean.positions.some(item=>item.id===id&&fingerprint(item)===value.fingerprint))invalidate(id);
+    if(active&&!clean.positions.some(item=>item.id===active.id&&fingerprint(item)===active.fingerprint))active.cancelled=true;
+    book=clean;loadError='';unreadable='';emit();return holdingsCopy(clean);
+  }
+  function savePosition(input){
+    const existing=input.id?position(input.id):null;
+    if(input.id&&!existing)throw new Error('This holding no longer exists. Start a new record.');
+    if(existing?.exits.length){
+      for(const key of ['symbol','market','assetType','tradeType','entryDate','entryPrice','quantity','entryFees','initialStopPrice'])if(input[key]!==undefined&&String(input[key]??'')!==String(existing[key]??''))throw new Error('Entry details cannot be changed after a sale. Keep this lot’s history and record another buy as a separate holding.');
+    }
+    const savedAt=timestamp(),candidate={...existing,...input,id:existing?.id||holdingsId(),exits:existing?.exits||[],initialStopPrice:existing?existing.initialStopPrice:(input.initialStopPrice??null),createdAt:existing?.createdAt||savedAt,updatedAt:savedAt};
+    const clean=model.validatePosition(candidate,{today:today()});
+    commit({schemaVersion:1,positions:existing?book.positions.map(item=>item.id===clean.id?clean:item):[clean,...book.positions]});
+    invalidate(clean.id);emit();return holdingsCopy(clean);
+  }
+  function recordExit(id,input){
+    const existing=position(id);if(!existing)throw new Error('Choose an existing holding.');
+    const exit={...input,id:holdingsId()},candidate=model.validatePosition({...existing,exits:[...existing.exits,exit],updatedAt:timestamp()},{today:today()});
+    commit({schemaVersion:1,positions:book.positions.map(item=>item.id===id?candidate:item)});invalidate(id);emit();return holdingsCopy(candidate);
+  }
+  function updateExit(id,exitId,input){
+    const existing=position(id);if(!existing||!existing.exits.some(exit=>exit.id===exitId))throw new Error('Choose an existing sale record.');
+    const candidate=model.validatePosition({...existing,exits:existing.exits.map(exit=>exit.id===exitId?{...input,id:exit.id}:exit),updatedAt:timestamp()},{today:today()});
+    commit({schemaVersion:1,positions:book.positions.map(item=>item.id===id?candidate:item)});invalidate(id);emit();return holdingsCopy(candidate);
+  }
+  function removeExit(id,exitId){
+    const existing=position(id);if(!existing||!existing.exits.some(exit=>exit.id===exitId))throw new Error('Choose an existing sale record.');
+    const candidate=model.validatePosition({...existing,exits:existing.exits.filter(exit=>exit.id!==exitId),updatedAt:timestamp()},{today:today()});
+    commit({schemaVersion:1,positions:book.positions.map(item=>item.id===id?candidate:item)});invalidate(id);emit();return holdingsCopy(candidate);
+  }
+  function importBackup(text,options={}){
+    const incoming=model.parseHoldingsBackup(text,{today:today()}),next=[...book.positions];let added=0,skipped=0;
+    for(const item of incoming.positions){const current=next.find(existing=>existing.id===item.id);if(current){if(fingerprint(current)!==fingerprint(item))throw new Error('A backup record has the same ID but different values. No records were imported; keep both backups and resolve the conflict first.');skipped++;}else{next.push(item);added++;}}
+    commit({schemaVersion:1,positions:next},options);return {added,skipped};
+  }
+  function refresh(){
+    const next=String(deps.getConnectionKey?.()||'');
+    if(next!==connection){connection=next;reviews.clear();if(active)active.cancelled=true;}
+    emit();
+  }
+  async function analysePosition(id){
+    refresh();if(active)throw new Error('Wait for the current holding review to finish.');
+    const current=position(id);if(!current)throw new Error('Choose an existing holding.');
+    const totals=model.positionTotals(current);if(totals.remainingQuantity<=0)throw new Error('This holding is closed. Its realised result is in Trade History.');
+    reviews.delete(id);emit();
+    const capability=deps.canFetch?.()??true;
+    if(capability===false||capability?.ready===false)throw new Error(capability?.message||'Connect your personal data gateway in Risk & Data Settings first.');
+    const profile=deps.styles[current.style];if(!profile)throw new Error('Choose a supported trading style.');
+    const snapshot=holdingsCopy(current),request={id,sequence:++sequence,connection,fingerprint:fingerprint(current),cancelled:false,progress:'Loading completed candles…'};
+    active=request;emit();const frames=[];
+    const stillCurrent=()=>active===request&&!request.cancelled&&request.connection===String(deps.getConnectionKey?.()||'')&&fingerprint(position(id))===request.fingerprint;
+    try{
+      for(const timeframe of profile.timeframes){
+        if(!stillCurrent())return null;
+        request.progress=`Loading ${timeframe==='1day'?'daily':timeframe==='1week'?'weekly':timeframe.toUpperCase()} candles for ${snapshot.symbol}…`;emit();
+        try{
+          const data=await deps.fetchMarket({symbol:snapshot.symbol,market:snapshot.market},timeframe);
+          if(!stillCurrent())return null;
+          frames.push({timeframe,bars:data.bars,meta:data.meta,analysis:deps.analyseFrame(data.bars,profile.engineStyle)});
+        }catch(error){frames.push({timeframe,error:String(error.message||'Provider data unavailable.').slice(0,350)});if(error.status===429)break;}
+        if(frames.length<profile.timeframes.length)await wait(1500);
+      }
+      if(!stillCurrent())return null;
+      const report=deps.reviewHolding({position:snapshot,totals,frames,generatedAt:timestamp()});
+      reviews.set(id,{fingerprint:request.fingerprint,connection:request.connection,report});return holdingsCopy(report);
+    }finally{if(active===request)active=null;emit();}
+  }
+  return {
+    getBook:()=>holdingsCopy(book),getPosition:id=>position(id)?holdingsCopy(position(id)):null,
+    getReview:id=>{const value=reviews.get(id),generated=Date.parse(value?.report?.generatedAt||'');if(!value)return null;if(!Number.isFinite(generated)||now()-generated>=30*60000||generated>now()+60000||value.connection!==String(deps.getConnectionKey?.()||'')||value.fingerprint!==fingerprint(position(id))){reviews.delete(id);return null;}return holdingsCopy(value.report);},
+    getState:()=>({loadError,active:active?{id:active.id,progress:active.progress,cancelled:active.cancelled}:null}),
+    savePosition,recordExit,updateExit,removeExit,importBackup,analysePosition,refresh,
+    exportBackup:()=>unreadable||model.serializeHoldingsBook(book),
+    subscribe:fn=>{listener=typeof fn==='function'?fn:()=>{};},
+    setStyle:(id,style)=>{const existing=position(id);if(!existing)throw new Error('Choose an existing holding.');return savePosition({...existing,style});}
+  };
+}
+
+function mountHoldingsWorkspace(root,deps){
+  const controller=createHoldingsController(deps),styles=deps.styles;
+  let editingId='',exitId='',editingExitId='',reviewId='',message='';
+  const e=id=>document.getElementById(id);
+  const field=(id,label,{type='text',value='',min,max,step,required=false,wide=false}={})=>`<label${wide?' class="holding-wide"':''}>${label}<input id="${id}" type="${type}" value="${holdingsEscape(value)}"${min!==undefined?' min="'+min+'"':''}${max!==undefined?' max="'+max+'"':''}${step?' step="'+step+'"':''}${required?' required':''}${type==='text'?' maxlength="160"':''}/></label>`;
+  const styleOptions=selected=>Object.values(styles).map(profile=>`<option value="${holdingsEscape(profile.id)}"${profile.id===selected?' selected':''}>${holdingsEscape(profile.label)}</option>`).join('');
+  root.innerHTML=`<div class="card holdings-intro"><div class="card-title-row"><h3>My manually recorded holdings</h3><span class="badge badge-outline">Personal · browser only</span></div><p class="muted small">Record each buy as a separate lot. Quantities are individual shares or units, not Bursa board lots. Record partial or full sales against the same lot. Your broker remains the source of truth for executions.</p><div class="row-buttons"><button id="holdingsNew" class="btn primary">+ Record buy / holding</button><button id="holdingsExport" class="btn secondary">↓ Export holdings backup</button><label class="btn ghost holdings-file">↑ Import holdings backup<input id="holdingsImport" type="file" accept=".json,application/json"/></label></div><p id="holdingsStatus" class="holdings-status" role="status" aria-live="polite"></p><div id="holdingsRecovery"></div></div><div id="holdingsStats" class="holdings-summary"></div><div class="card space-top"><h3>Open holdings</h3><p class="muted small">Choose a style for each holding, then Analyse. Reviews use completed delayed candles and your saved protective stop and targets. Saved reviews expire after 30 minutes; refresh with Analyse to obtain a new review. A review does not submit an order.</p><div class="scroll-table"><table class="holdings-table"><thead><tr><th>Holding</th><th>Remaining / bought</th><th>Entry / remaining cost</th><th>Trading style</th><th>Last reviewed close / unrealised P/L</th><th>Actions</th></tr></thead><tbody id="holdingsRows"></tbody></table></div></div><div id="holdingEditor" class="card space-top"><div class="card-title-row"><h3 id="holdingEditorTitle">Record a buy / existing holding</h3><button id="holdingCancelEdit" class="btn sm ghost" type="button">Cancel editing</button></div><p class="muted small">Enter the actual execution date, price and fees from your broker. Use separate lots for later buys. Blank stop or target means it has not been defined. Original entry details lock after the first sale.</p><form id="holdingEntryForm" class="holdings-form">${field('holdingSymbol','Ticker · e.g. 1155 / AAPL',{required:true})}<label>Market<select id="holdingMarket"><option value="MY">Bursa Malaysia · MYR</option><option value="US">US · USD</option></select></label><label>Instrument<select id="holdingAssetType"><option value="Stock">Stock</option><option value="ETF">ETF</option></select></label><label>Record type<select id="holdingTradeType"><option value="actual">Actual trade</option><option value="paper">Paper trade</option></select></label>${field('holdingEntryDate','Buy date',{type:'date',required:true})}${field('holdingEntryPrice','Buy price per share',{type:'number',min:'0.000001',step:'any',required:true})}${field('holdingQuantity','Shares / units bought',{type:'number',min:1,step:1,required:true})}${field('holdingEntryFees','Total buy fees · quote currency',{type:'number',min:0,step:'any',value:0,required:true})}<label>Trading style<select id="holdingStyle">${styleOptions('swing')}</select></label>${field('holdingStop','Current protective stop · optional',{type:'number',min:'0.000001',step:'any'})}${field('holdingTarget1','Take-profit level 1 · optional',{type:'number',min:'0.000001',step:'any'})}${field('holdingTarget2','Take-profit level 2 · optional',{type:'number',min:'0.000001',step:'any'})}${field('holdingOriginalStop','Original stop at entry · optional',{type:'number',min:'0.000001',step:'any'})}<label class="holding-wide">Thesis / reason to hold<textarea id="holdingThesis" rows="2" maxlength="2000" placeholder="Why did you enter? What would invalidate the idea?"></textarea></label><label class="holding-wide">Notes<textarea id="holdingNotes" rows="2" maxlength="2000" placeholder="Broker execution details, conditions to monitor, lessons…"></textarea></label><div class="row-buttons holding-full"><button class="btn primary" type="submit" id="holdingSave">Save holding</button><span id="holdingEntryLock" class="muted small"></span></div></form></div><div id="holdingExitEditor" class="card space-top hidden"><h3 id="holdingExitTitle">Record a sale</h3><p class="muted small">Record only an actual or paper execution you made. Analysing a holding never records a sale automatically.</p><form id="holdingExitForm" class="holdings-form"><label class="holding-full">Sale entry<select id="holdingExitMode"><option value="">New sale</option></select></label>${field('holdingExitDate','Sale date',{type:'date',required:true})}${field('holdingExitQuantity','Shares / units sold',{type:'number',min:1,step:1,required:true})}${field('holdingExitPrice','Sale price per share',{type:'number',min:0,step:'any',required:true})}${field('holdingExitFees','Total sale fees · quote currency',{type:'number',min:0,step:'any',value:0,required:true})}<div class="row-buttons holding-full"><button class="btn primary" type="submit" id="holdingExitSave">Save sale</button><button id="holdingUndoSale" class="btn ghost hidden" type="button">Undo this sale record</button><button id="holdingCancelExit" class="btn ghost" type="button">Cancel</button></div></form><div id="holdingUndoPanel" class="holdings-undo hidden"><p id="holdingUndoMessage"></p><div class="row-buttons"><button id="holdingConfirmUndo" type="button" class="btn secondary">Confirm undo sale record</button><button id="holdingCancelUndo" type="button" class="btn ghost">Keep sale record</button></div></div></div><div id="holdingReview" class="space-top"></div><details class="card space-top"><summary class="holdings-detail-title">Recorded lots & sale history</summary><p class="muted small">Realised results allocate buy fees proportionally to sold shares and include recorded sale fees. Open-position P/L uses the reviewed historical close, includes remaining buy fees and excludes dividends, unknown future selling fees, taxes and FX costs.</p><div id="holdingHistory"></div></details>`;
+  const entryIds={symbol:'holdingSymbol',market:'holdingMarket',assetType:'holdingAssetType',tradeType:'holdingTradeType',entryDate:'holdingEntryDate',entryPrice:'holdingEntryPrice',quantity:'holdingQuantity',entryFees:'holdingEntryFees',style:'holdingStyle',stopPrice:'holdingStop',target1:'holdingTarget1',target2:'holdingTarget2',initialStopPrice:'holdingOriginalStop',thesis:'holdingThesis',notes:'holdingNotes'};
+  const numeric=new Set(['entryPrice','quantity','entryFees','stopPrice','target1','target2','initialStopPrice']);
+  const entryLocked=['symbol','market','assetType','tradeType','entryDate','entryPrice','quantity','entryFees'];
+  const say=text=>{message=text;e('holdingsStatus').textContent=text;};
+  const list=items=>(items||[]).length?`<ul>${items.map(value=>`<li>${holdingsEscape(value)}</li>`).join('')}</ul>`:'<p class="muted small">No additional evidence supplied.</p>';
+  function resetEditor(){
+    editingId='';for(const [key,id]of Object.entries(entryIds)){e(id).value=({market:'MY',assetType:'Stock',tradeType:'actual',style:'swing',entryFees:0,entryDate:holdingsToday()})[key]??'';e(id).disabled=false;}
+    e('holdingEditorTitle').textContent='Record a buy / existing holding';e('holdingEntryLock').textContent='';e('holdingSave').textContent='Save holding';
+  }
+  function editPosition(id){
+    const position=controller.getPosition(id);if(!position)return;
+    editingId=id;for(const [key,fieldId]of Object.entries(entryIds)){e(fieldId).value=position[key]??'';e(fieldId).disabled=position.exits.length>0&&(entryLocked.includes(key)||key==='initialStopPrice');}
+    // Original planned risk is a baseline, not a value to rewrite with each review.
+    e('holdingOriginalStop').disabled=true;e('holdingEditorTitle').textContent=`Edit ${position.symbol} · plan and notes`;e('holdingEntryLock').textContent=position.exits.length?'Entry details are locked because sales have been recorded.':'Original stop is preserved; current stop and targets remain editable.';e('holdingSave').textContent='Save changes';
+    e('holdingEditor').scrollIntoView?.({behavior:'smooth',block:'start'});say('Editing saved holding. Reviews update only after you save and analyse again.');
+  }
+  function renderStats(book){
+    const groups=new Map();
+    for(const position of book.positions){const key=position.tradeType+':'+position.currency,group=groups.get(key)||{currency:position.currency,type:position.tradeType,open:0,realized:0,cost:0};const totals=deps.model.positionTotals(position);group.open+=totals.remainingQuantity>0?1:0;group.realized+=totals.realizedPnl;group.cost+=totals.remainingCostBasis;groups.set(key,group);}
+    e('holdingsStats').innerHTML=[...groups.values()].map(group=>`<div class="card holdings-currency"><strong>${holdingsEscape(group.currency)} · ${group.type==='paper'?'Paper':'Actual'}</strong><div class="indicator-row"><span>Open lots</span><strong>${group.open}</strong></div><div class="indicator-row"><span>Remaining cost incl. buy fees</span><strong>${holdingsMoney(group.cost,group.currency)}</strong></div><div class="indicator-row"><span>Realised P/L after recorded fees</span><strong class="${group.realized>=0?'up':'down'}">${holdingsMoney(group.realized,group.currency)}</strong></div></div>`).join('');
+  }
+  function render(){
+    const book=controller.getBook(),state=controller.getState();renderStats(book);
+    e('holdingsStatus').textContent=state.loadError||message||'No broker connection. Records and backups stay in your browser.';
+    e('holdingsRecovery').innerHTML=state.loadError?'<label class="holdings-recovery"><input type="checkbox" id="holdingReplaceUnreadable"/> I exported a rescue copy and want a valid imported backup to replace the unreadable saved data.</label>':'';
+    const open=book.positions.filter(position=>deps.model.positionTotals(position).remainingQuantity>0);
+    e('holdingsRows').innerHTML=open.length?open.map(position=>{
+      const report=controller.getReview(position.id),quote=report?.priceReference?.price,totals=deps.model.positionTotals(position,{price:quote??null});
+      const pnl=Number.isFinite(totals.unrealizedPnl)?`${holdingsMoney(totals.unrealizedPnl,position.currency)} · after buy fees`:'Analyse to obtain a dated close';
+      return `<tr><td><strong>${holdingsEscape(position.symbol)}</strong><small>${holdingsEscape(position.market)} · ${position.tradeType==='paper'?'Paper':'Actual'} · Bought ${holdingsEscape(position.entryDate)}</small></td><td>${holdingsNumber(totals.remainingQuantity,0)} / ${holdingsNumber(position.quantity,0)}</td><td>${holdingsMoney(position.entryPrice,position.currency)}<small>Cost ${holdingsMoney(totals.remainingCostBasis,position.currency)}</small></td><td><label class="holdings-style-label"><span class="sr-only">Trading style for ${holdingsEscape(position.symbol)}</span><select data-holding-style="${holdingsEscape(position.id)}">${styleOptions(position.style)}</select></label></td><td>${Number.isFinite(quote)?holdingsMoney(quote,position.currency):'No reviewed quote'}<small>${holdingsEscape(pnl)}</small>${report?.priceReference?.lastCandle?`<small>Bar start ${holdingsEscape(report.priceReference.lastCandle)}</small>`:''}${report?`<small>${holdingsEscape(report.label)}</small>`:''}</td><td><div class="row-buttons"><button class="btn sm primary" data-holding-action="analyse" data-id="${holdingsEscape(position.id)}"${state.active?' disabled':''}>Analyse holding</button><button class="btn sm ghost" data-holding-action="edit" data-id="${holdingsEscape(position.id)}">Edit plan</button><button class="btn sm secondary" data-holding-action="sell" data-id="${holdingsEscape(position.id)}">Record sale</button></div></td></tr>`;
+    }).join(''):'<tr><td colspan="6" class="empty">No open holdings. Record a buy or import your holdings backup.</td></tr>';
+    e('holdingHistory').innerHTML=book.positions.length?book.positions.map(position=>{
+      const totals=deps.model.positionTotals(position);
+      return `<details class="holdings-lot-history"><summary>${holdingsEscape(position.symbol)} · ${position.tradeType==='paper'?'Paper':'Actual'} · ${totals.status==='closed'?'Closed':'Open'} · Realised ${holdingsMoney(totals.realizedPnl,position.currency)}</summary><p class="small">Bought ${holdingsNumber(position.quantity,0)} at ${holdingsMoney(position.entryPrice,position.currency)} on ${holdingsEscape(position.entryDate)}. Buy fees ${holdingsMoney(position.entryFees,position.currency)}. Remaining ${holdingsNumber(totals.remainingQuantity,0)}.</p>${position.exits.length?`<div class="scroll-table"><table><thead><tr><th>Sale date</th><th>Shares / units</th><th>Price</th><th>Sale fees</th><th>Correction</th></tr></thead><tbody>${position.exits.map(exit=>`<tr><td>${holdingsEscape(exit.date)}</td><td>${holdingsNumber(exit.quantity,0)}</td><td>${holdingsMoney(exit.price,position.currency)}</td><td>${holdingsMoney(exit.fees,position.currency)}</td><td><button class="btn sm ghost" data-holding-action="correct-sale" data-id="${holdingsEscape(position.id)}" data-exit-id="${holdingsEscape(exit.id)}">Correct / undo</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted small">No sales recorded.</p>'}<p class="holdings-note">${holdingsEscape(position.thesis||'No thesis recorded.')}<br>${holdingsEscape(position.notes||'')}</p><button class="btn sm ghost" data-holding-action="edit" data-id="${holdingsEscape(position.id)}">Edit plan / notes</button></details>`;
+    }).join(''):'<p class="muted small">No manual holdings recorded yet.</p>';
+    if(state.active){e('holdingReview').innerHTML=`<div class="card"><h3>Holding review</h3><p class="holdings-status" role="status">${holdingsEscape(state.active.cancelled?'Holding or connection changed. Discarding the in-flight result…':state.active.progress)}</p></div>`;}
+    else if(reviewId)renderReview(reviewId);
+  }
+  function renderReview(id){
+    const report=controller.getReview(id),position=controller.getPosition(id);
+    if(!report||!position){e('holdingReview').innerHTML='<div class="card"><h3>Holding review</h3><p class="muted small">This review is unavailable or its holding/settings changed. Analyse the saved holding again.</p></div>';return;}
+    const reference=report.priceReference;
+    e('holdingReview').innerHTML=`<div class="card holding-review-card holding-review-${holdingsEscape(report.classification)}"><div class="card-title-row"><h3>${holdingsEscape(position.symbol)} · ${holdingsEscape(report.label)}</h3><span class="badge badge-outline">${holdingsEscape(report.style?.label||styles[position.style].label)}</span></div><p class="holdings-review-summary">${holdingsEscape(report.summary)}</p>${reference?`<p class="muted small">Reference: ${holdingsMoney(reference.price,position.currency)} · completed ${holdingsEscape(reference.timeframe||'1day')} candle starting ${holdingsEscape(reference.lastCandle)} · ${holdingsEscape(reference.timezone||'exchange timezone not supplied')}<br>Source ${holdingsEscape(reference.provider)} · Fetched ${holdingsEscape(reference.fetchedAt||'unknown')} · Completion ${reference.completionInferred?'inferred':'reported'}<br>Generated ${holdingsEscape(report.generatedAt)}. This is a historical candle close, not a live executable quote.</p>`:'<p class="muted small">No usable price reference. A holding conclusion and current P/L cannot be established.</p>'}<div class="two-col"><div><h4>Evidence</h4>${list(report.evidence)}</div><div><h4>Risks and missing context</h4>${list(report.risks)}</div></div><h4>Your saved plan</h4><p class="small">Protective stop: ${holdingsMoney(report.plan?.stopPrice,position.currency)} · Target 1: ${holdingsMoney(report.plan?.target1,position.currency)} · Target 2: ${holdingsMoney(report.plan?.target2,position.currency)}</p><p class="holdings-note">Thesis: ${holdingsEscape(position.thesis||'Not recorded.')}</p><h4>Conditional next checks</h4>${list(report.nextChecks)}<details><summary>Timeframe coverage · ${report.coverage?.available??0}/${report.coverage?.required??0}</summary>${(report.frames||[]).map(frame=>`<div class="holdings-frame"><strong>${holdingsEscape(frame.timeframe)} · ${holdingsEscape(frame.status)}</strong><p>${holdingsEscape(frame.reason||frame.trend||'')}${frame.lastCandle?' · Bar start '+holdingsEscape(frame.lastCandle):''}</p>${list(frame.warnings)}</div>`).join('')}</details><p class="disclaimer">Stop or target thresholds are compared with the reference close, not an actual fill. Verify your broker’s current quote, announcements and order status before deciding. No sale is recorded unless you enter it yourself. Style changes do not rewrite your stop or targets.</p></div>`;
+  }
+  function fillExitEditor(saleId=''){
+    const position=controller.getPosition(exitId);if(!position)return;
+    const totals=deps.model.positionTotals(position),sale=position.exits.find(exit=>exit.id===saleId);
+    if(!sale&&totals.remainingQuantity<=0){say('This lot is closed. Choose an existing sale to correct or undo.');return;}
+    editingExitId=sale?.id||'';e('holdingExitMode').value=editingExitId;
+    e('holdingExitDate').value=sale?.date||holdingsToday();e('holdingExitQuantity').value=sale?.quantity??totals.remainingQuantity;e('holdingExitQuantity').max=totals.remainingQuantity+(sale?.quantity||0);e('holdingExitPrice').value=sale?.price??'';e('holdingExitFees').value=sale?.fees??0;
+    e('holdingExitSave').textContent=sale?'Save sale correction':'Save sale';e('holdingUndoSale').classList[sale?'remove':'add']('hidden');e('holdingUndoPanel').classList.add('hidden');
+  }
+  function openExit(id,saleId=''){
+    const position=controller.getPosition(id);if(!position)return;const totals=deps.model.positionTotals(position);
+    exitId=id;e('holdingExitTitle').textContent=`Record / correct sale · ${position.symbol} · ${holdingsNumber(totals.remainingQuantity,0)} shares / units remaining`;
+    e('holdingExitMode').innerHTML=`<option value=""${totals.remainingQuantity<=0?' disabled':''}>New sale${totals.remainingQuantity<=0?' · lot closed':''}</option>`+position.exits.map(exit=>`<option value="${holdingsEscape(exit.id)}">Correct ${holdingsEscape(exit.date)} · ${holdingsNumber(exit.quantity,0)} at ${holdingsMoney(exit.price,position.currency)}</option>`).join('');
+    fillExitEditor(saleId||(totals.remainingQuantity<=0?position.exits[0]?.id:''));e('holdingExitEditor').classList.remove('hidden');e('holdingExitEditor').scrollIntoView?.({behavior:'smooth',block:'start'});
+  }
+  function downloadBackup(){
+    const text=controller.exportBackup(),blob=new Blob([text],{type:'application/json'}),url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download=controller.getState().loadError?'bursaquant-holdings-rescue.txt':'bursaquant-holdings.json';anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);say(controller.getState().loadError?'Saved raw holdings data exported for recovery.':'Holdings backup exported. It contains your private manual records; store it securely.');
+  }
+  function onClick(event){
+    const button=event.target.closest?.('[data-holding-action]');if(!button||!root.contains(button))return;
+    const {id,holdingAction:action}=button.dataset;
+    if(action==='edit')editPosition(id);
+    if(action==='sell')openExit(id);
+    if(action==='correct-sale')openExit(id,button.dataset.exitId);
+    if(action==='analyse'){reviewId=id;controller.analysePosition(id).then(report=>{if(report)say('Holding review ready. Check its candle dates and conditions.');else say('Holding or connection changed; the old review was discarded.');}).catch(error=>{say(error.message);renderReview(id);});}
+  }
+  function onChange(event){
+    const select=event.target.closest?.('[data-holding-style]');
+    if(select&&root.contains(select)){try{controller.setStyle(select.dataset.holdingStyle,select.value);say('Trading style saved. Analyse this holding again to apply it.');}catch(error){say(error.message);render();}}
+  }
+  e('holdingEntryForm').onsubmit=event=>{
+    event.preventDefault();try{
+      const input=Object.fromEntries(Object.entries(entryIds).map(([key,id])=>[key,numeric.has(key)?e(id).value.trim()===''?null:Number(e(id).value):e(id).value]));
+      if(editingId){input.id=editingId;input.initialStopPrice=controller.getPosition(editingId)?.initialStopPrice??null;}
+      const saved=controller.savePosition(input);say(`${saved.symbol} holding ${editingId?'updated':'saved'} on this browser.`);resetEditor();
+    }catch(error){say(error.message);}
+  };
+  e('holdingExitForm').onsubmit=event=>{event.preventDefault();try{
+    for(const [id,label]of [['holdingExitQuantity','Shares sold'],['holdingExitPrice','Sale price'],['holdingExitFees','Sale fees']])if(e(id).value.trim()==='')throw new Error(label+' is required. Enter 0 only when confirmed.');
+    const values={date:e('holdingExitDate').value,quantity:Number(e('holdingExitQuantity').value),price:Number(e('holdingExitPrice').value),fees:Number(e('holdingExitFees').value)},correction=!!editingExitId;
+    if(correction)controller.updateExit(exitId,editingExitId,values);else controller.recordExit(exitId,values);
+    e('holdingExitEditor').classList.add('hidden');e('holdingUndoPanel').classList.add('hidden');exitId='';editingExitId='';say(correction?'Sale correction saved. Remaining shares and realised results have been recalculated.':'Sale recorded. Remaining shares and realised results have been recalculated.');
+  }catch(error){say(error.message);}};
+  e('holdingExitMode').onchange=()=>fillExitEditor(e('holdingExitMode').value);
+  e('holdingUndoSale').onclick=()=>{
+    const position=controller.getPosition(exitId),sale=position?.exits.find(exit=>exit.id===editingExitId);if(!sale)return;
+    e('holdingUndoMessage').textContent=`Undo the manual ${position.symbol} sale record for ${holdingsNumber(sale.quantity,0)} shares / units on ${sale.date}? The quantity returns to this holding and recorded P/L is recalculated. This changes your tracker only; it does not cancel a broker trade.`;e('holdingUndoPanel').classList.remove('hidden');
+  };
+  e('holdingConfirmUndo').onclick=()=>{try{controller.removeExit(exitId,editingExitId);e('holdingExitEditor').classList.add('hidden');e('holdingUndoPanel').classList.add('hidden');exitId='';editingExitId='';say('Manual sale record undone. Shares returned to the holding; no broker trade was changed.');}catch(error){say(error.message);}};
+  e('holdingCancelUndo').onclick=()=>e('holdingUndoPanel').classList.add('hidden');
+  e('holdingsImport').onchange=async event=>{
+    const file=event.target.files?.[0];if(!file)return;try{if(file.size>2000000)throw new Error('Choose a holdings backup of at most 2 MB.');const replace=e('holdingReplaceUnreadable')?.checked===true,result=controller.importBackup(await file.text(),{replaceUnreadable:replace});say(`Imported ${result.added} holdings; ${result.skipped} identical records already existed.`);}catch(error){say(error.message);}event.target.value='';
+  };
+  e('holdingsNew').onclick=()=>{resetEditor();e('holdingEditor').scrollIntoView?.({behavior:'smooth',block:'start'});};e('holdingCancelEdit').onclick=resetEditor;e('holdingCancelExit').onclick=()=>{exitId='';editingExitId='';e('holdingExitEditor').classList.add('hidden');e('holdingUndoPanel').classList.add('hidden');};e('holdingsExport').onclick=downloadBackup;
+  root.addEventListener('click',onClick);root.addEventListener('change',onChange);controller.subscribe(render);resetEditor();render();
+  return {getBook:controller.getBook,refresh:controller.refresh,controller};
+}
+
+return {createHoldingsController,mountHoldingsWorkspace};
+})();
 const {evaluateAccumulation,DEFAULT_SCREEN_SETTINGS}=BQAccumulation;
 const {screenInstrument,parseScreenSymbols,parseScreenListFile,createScreenRun,screenCoverage,scanDailyBatch}=BQScanRunner;
 const {buildDeepReport}=BQDeepAnalysis;
 const {mountResearchWorkspace}=BQResearchUI;
 const {mountIpoWorkspace}=BQIpo;
+const {validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings}=BQHoldingsModel;
+const {HOLDING_STYLES,reviewHolding}=BQHoldingReview;
+const {mountHoldingsWorkspace}=BQHoldingsUI;
+function registerHoldings(){
+ holdingsWorkspace=mountHoldingsWorkspace($('holdingsWorkspace'),{
+   model:{validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings},
+   styles:HOLDING_STYLES,reviewHolding,
+   getConnectionKey:()=>JSON.stringify([gatewayBase,dataProvider,gatewayRevision,ratingStrategy]),
+   canFetch:()=>({ready:!!gatewayBase&&!demoMode,message:!gatewayBase?'Connect your personal data gateway in Risk & Data Settings first.':'Click Refresh Data in Stock Analysis to leave demo mode before reviewing a holding.'}),
+   fetchMarket:(item,interval)=>researchGatewayFetch(`/market?market=${encodeURIComponent(item.market)}&symbol=${encodeURIComponent(item.symbol)}&interval=${encodeURIComponent(interval)}&provider=${encodeURIComponent(dataProvider)}&limit=500`),
+   analyseFrame:(bars,engineStyle)=>analyse(bars,engineStyle,ratingStrategy)
+ });
+}
 function deepSelection(){
  const controls=screenControls(),screenSettings={minAverageVolume:controls.minAverageVolume,minAverageTurnover:symbol.market==='MY'?controls.turnoverMY:controls.turnoverUS,maxRangePct:controls.maxRangePct,cmfThreshold:controls.cmfThreshold};
  return {symbol:symbol.symbol,name:symbol.name,market:symbol.market,currency:symbol.currency,type:symbol.type,mode:style,strategy:ratingStrategy,riskSettings:{...settings},screenSettings,key:JSON.stringify([symbol.symbol,symbol.market,symbol.type,dataProvider,gatewayBase,gatewayRevision,demoMode,style,ratingStrategy,settings,screenSettings]),connectionKey:JSON.stringify([dataProvider,gatewayBase,gatewayRevision]),canLoad:!!gatewayBase&&!demoMode&&['Stock','ETF'].includes(symbol.type),unavailableReason:!gatewayBase?'Connect your gateway in Risk & Data Settings first.':demoMode?'Select a stock and click Refresh Data in Stock Analysis to leave demo mode.':'Deep research supports ordinary stocks and ETFs.'};
@@ -842,7 +1433,7 @@ let dataProvider=load('dataProvider','auto'),demoMode=load('demoMode',!gatewayBa
 if(!['auto','yahoo','twelvedata','isaham'].includes(dataProvider))dataProvider='auto';
 let requestSeq=0,activeDataKey='',dataError='';
 let lastProviderMeta=null;
-let researchWorkspace=null,gatewayRevision=0;
+let researchWorkspace=null,holdingsWorkspace=null,gatewayRevision=0;
 let ratingStrategy=normalizeStrategy(load('ratingStrategy',null));
 let screenRun=load('screenRun',null),screenDirectory=load('screenDirectory',null),screenStop=false,screenLoading=false,screenDirectorySeq=0,screenVisible=100;
 if(screenRun?.version!==1||!Array.isArray(screenRun?.queue)||!Array.isArray(screenRun?.results))screenRun=null;
@@ -852,7 +1443,7 @@ function notify(msg){const t=$('toast');t.textContent=msg;t.classList.add('show'
 function fmt(v,dec=2){return Number.isFinite(v)?Number(v).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec}):'—'};
 const money=(v,currency=symbol.currency)=>`${currency==='USD'?'$':'RM'}${fmt(v,v>1?2:4)}`;
 const nfmt=v=>Number.isFinite(v)?fmt(v,2):'—';
-function setPage(page){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('crumb').textContent=({'analysis':'STOCK ANALYSIS','research':'DEEP RESEARCH & AI','ipo':'IPO RESEARCH','screener':'STOCK SCREENER','watchlist':'WATCHLIST','journal':'TRADING JOURNAL','settings':'SETTINGS','strategy':'STRATEGY & LEARNING'})[page]||'STOCK ANALYSIS';$('sidebar').classList.remove('open');if(page==='settings')fillSettings();if(page==='strategy'){fillStrategyForm();renderResearchAnswer();}if(page==='watchlist')renderWatch();if(page==='journal')renderJournal();if(page==='screener')renderScreener();if(page==='research')researchWorkspace?.refresh();if(page==='analysis')requestAnimationFrame(drawChart);window.scrollTo({top:0,behavior:'instant'});}
+function setPage(page){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('crumb').textContent=({'analysis':'STOCK ANALYSIS','research':'DEEP RESEARCH & AI','ipo':'IPO RESEARCH','screener':'STOCK SCREENER','watchlist':'WATCHLIST','journal':'TRADES & HOLDINGS','settings':'SETTINGS','strategy':'STRATEGY & LEARNING'})[page]||'STOCK ANALYSIS';$('sidebar').classList.remove('open');if(page==='settings')fillSettings();if(page==='strategy'){fillStrategyForm();renderResearchAnswer();}if(page==='watchlist')renderWatch();if(page==='journal'){renderJournal();holdingsWorkspace?.refresh();}if(page==='screener')renderScreener();if(page==='research')researchWorkspace?.refresh();if(page==='analysis')requestAnimationFrame(drawChart);window.scrollTo({top:0,behavior:'instant'});}
 function getInstrument(q){q=q.toUpperCase().replace('.KL','');return instruments.find(s=>s.symbol.toUpperCase()===q)||instruments.find(s=>s.name.toUpperCase()===q)||null}
 function selectedInstrument(q){const found=getInstrument(q);if(found)return found;const raw=String(q).trim().toUpperCase().replace(/[^A-Z0-9.^:-]/g,'').slice(0,24);if(!raw)throw new Error('Type a ticker or company name first.');return {symbol:raw,name:`Custom ticker ${raw}`,market:/^\d{4}/.test(raw)?'MY':'US',exchange:'USER SELECTED',currency:/^\d{4}/.test(raw)?'MYR':'USD',type:'Stock'};}
 let searchTimer=null;
@@ -1098,7 +1689,7 @@ function download(filename,text,type='text/plain'){const blob=new Blob([text],{t
 function exportJournal(){const clean=x=>'"'+String(x??'').replace(/"/g,'""')+'"';const cols=['date','symbol','currency','entry','exit','quantity','fees','notes'];download('bursaquant-journal.csv',[cols.join(','),...trades.map(t=>cols.map(k=>clean(t[k])).join(','))].join('\n'),'text/csv')}
 function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEventListener('click',()=>setPage(n.dataset.page)));$('menuBtn').onclick=()=>$('sidebar').classList.toggle('open');$('loadTicker').onclick=()=>chooseSymbol($('tickerInput').value);$('tickerInput').addEventListener('input',renderDropdown);$('tickerInput').addEventListener('keydown',e=>{if(e.key==='Enter')chooseSymbol(e.target.value);if(e.key==='Escape')$('searchResults').classList.add('hidden')});document.addEventListener('click',e=>{if(!e.target.closest('.search-wrapper'))$('searchResults').classList.add('hidden')});document.querySelectorAll('[data-tf]').forEach(btn=>btn.addEventListener('click',()=>{if(source==='CSV IMPORT'){notify('Imported CSV candle interval is fixed; re-import a different timeframe to change it.');return}timeframe=btn.dataset.tf;document.querySelectorAll('[data-tf]').forEach(x=>x.classList.toggle('selected',x.dataset.tf===timeframe));fetchOrDemo()}));$('modeSelect').addEventListener('change',e=>{style=e.target.value;updateAll()});$('watchBtn').onclick=()=>{if(watchlist.includes(symbol.symbol)){watchlist=watchlist.filter(s=>s!==symbol.symbol);notify('Removed from watchlist')}else{watchlist.unshift(symbol.symbol);notify('Added to watchlist')}persist('watchlist',watchlist);renderAnalysis();renderResearchAnswer()};$('saveAnalysis').onclick=()=>{if(!currentAnalysis)return notify('Load valid candles before saving an analysis.');const a=currentAnalysis;snapshots.unshift({date:new Date().toISOString().slice(0,16).replace('T',' '),symbol:symbol.symbol,timeframe,style,source,lastCandle:sourceAt||null,providerMetadata:lastProviderMeta,strategy:normalizeStrategy(ratingStrategy),score:symbol.type==='Warrant'?null:a.score,verdict:symbol.type==='Warrant'?'Derivative model pending':a.verdict,price:a.price,support:a.levels.support,resistance:a.levels.resistance,plans:symbol.type==='Warrant'?[]:a.plans.map(p=>({entry:p.entry,stop:p.stop,tp1:p.tp1,tp2:p.tp2}))});snapshots=snapshots.slice(0,100);persist('snapshots',snapshots);notify('Research snapshot saved locally')};
  $('csvInput').addEventListener('change',async e=>{const f=e.target.files?.[0];if(!f)return;const seq=++requestSeq,selected=selectionKey();try{const text=await f.text();if(seq!==requestSeq||selected!==selectionKey())return;const rows=parseCSV(text);candles=rows;activeDataKey='';lastProviderMeta=null;dataError='';$('refreshData').disabled=false;timeframe=$('csvTimeframe').value;document.querySelectorAll('[data-tf]').forEach(b=>b.classList.toggle('selected',b.dataset.tf===timeframe));setSource('CSV IMPORT',new Date(rows.at(-1).time*1000).toISOString());updateAll();notify(`Imported ${rows.length} valid candles. CSV replaces current chart only.`)}catch(err){$('refreshData').disabled=false;notify('CSV import failed: '+err.message)}e.target.value=''});
- $('exportSaved').onclick=()=>download('bursaquant-backup.json',JSON.stringify({watchlist,snapshots,settings,trades,ratingStrategy,exportedAt:new Date().toISOString()},null,2),'application/json');$('exportJournal').onclick=exportJournal;
+ $('exportSaved').onclick=()=>download('bursaquant-backup.json',JSON.stringify({watchlist,snapshots,settings,trades,ratingStrategy,holdings:holdingsWorkspace?.getBook(),exportedAt:new Date().toISOString()},null,2),'application/json');$('exportJournal').onclick=exportJournal;
  $('journalForm').addEventListener('submit',e=>{e.preventDefault();const f=new FormData(e.target);const t={date:new Date().toISOString().slice(0,10),symbol:String(f.get('symbol')).trim().toUpperCase().slice(0,24),currency:String(f.get('currency')),entry:Number(f.get('entry')),exit:Number(f.get('exit')),quantity:Math.trunc(Number(f.get('quantity'))),fees:Number(f.get('fees'))||0,notes:String(f.get('notes')||'').trim().slice(0,250)};if(!t.symbol||!(t.entry>0)||t.exit<0||t.quantity<1||t.fees<0)return notify('Review trade values.');trades.unshift(t);persist('trades',trades);e.target.reset();renderJournal();notify('Closed trade saved locally')});
  $('settingsForm').addEventListener('submit',e=>{e.preventDefault();const read=id=>Number($(id).value);const obj={capital:read('setCapital'),riskPct:read('setRisk'),allocationPct:read('setAllocation'),feePct:read('setFee'),minFee:read('setMinFee'),feePctUS:read('setFeeUS'),minFeeUS:read('setMinFeeUS'),slippagePct:read('setSlippage'),usdMyr:read('setFx')};if(Object.values(obj).some(v=>!Number.isFinite(v))||obj.capital<=0||obj.riskPct<=0||obj.riskPct>10||obj.allocationPct<=0||obj.allocationPct>100||obj.usdMyr<=0||obj.feePct<0||obj.minFee<0||obj.feePctUS<0||obj.minFeeUS<0||obj.slippagePct<0)return notify('Invalid risk settings. Check positive capital, risk ≤ 10%, and allocation ≤ 100%.');settings=obj;persist('settings',settings);renderAnalysis();renderResearchAnswer();notify('Risk limits saved and trade scenarios recalculated')});
  $('apiForm').addEventListener('submit',async e=>{
@@ -1115,6 +1706,6 @@ function register(){document.querySelectorAll('.nav-item').forEach(n=>n.addEvent
  $('refreshData').onclick=()=>{if(!gatewayBase){if(hosted){gatewayBase=defaultGateway;persist('gatewayBase',gatewayBase);}else{setPage('settings');notify('Enter your gateway URL and access code, then Save & test gateway.');return;}}demoMode=false;persist('demoMode',false);fetchOrDemo();};
  const canvas=$('priceCanvas');canvas.addEventListener('mousemove',e=>{const meta=canvas.__chartMeta;if(!meta)return;const rect=canvas.getBoundingClientRect(),x=e.clientX-rect.left,index=meta.start+Math.floor((x-meta.padLeft)/meta.ww*meta.n);if(index<meta.start||index>=currentAnalysis.candles.length){$('chartTooltip').classList.add('hidden');return}hoverIndex=index;const c=currentAnalysis.candles[index];$('chartTooltip').innerHTML=`<strong>${htmlEscape(exchangeTimestamp(c.time,false))}</strong><br>O ${money(c.open)} &nbsp; H ${money(c.high)}<br>L ${money(c.low)} &nbsp; C ${money(c.close)}<br>Vol ${fmt(c.volume,0)}`;$('chartTooltip').style.left=Math.max(10,Math.min(rect.width-178,x+13))+'px';$('chartTooltip').classList.remove('hidden');drawChart()});canvas.addEventListener('mouseleave',()=>{hoverIndex=null;$('chartTooltip').classList.add('hidden');drawChart()});canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.min(candles.length,Math.max(25,zoom+(e.deltaY>0?12:-12)));drawChart()},{passive:false});window.addEventListener('resize',drawChart);
 }
-register();registerStrategy();registerScreener();registerResearch();$('tickerInput').value=symbol.symbol;if(demoMode)loadDemo(false);else fetchOrDemo();setInterval(()=>{$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT'},5000);$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT';
+register();registerStrategy();registerScreener();registerResearch();registerHoldings();$('tickerInput').value=symbol.symbol;if(demoMode)loadDemo(false);else fetchOrDemo();setInterval(()=>{$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT'},5000);$('clock').textContent=new Date().toLocaleString('en-MY',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kuala_Lumpur'})+' MYT';
 
 })();

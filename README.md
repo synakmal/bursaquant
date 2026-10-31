@@ -1,6 +1,16 @@
-# BursaQuant — Stock Research Terminal (v0.6 trial)
+# BursaQuant — Stock Research Terminal (v0.7 trial)
 
 BursaQuant is a lightweight stock-research dashboard for US and Bursa Malaysia markets. It combines real OHLCV data with transparent technical rules, conditional entry/stop/TP scenarios and configurable position-risk calculations.
+
+## New in v0.7: manual trades and holding reviews
+
+Open **Trades & Holdings** to record long stock/ETF buys, partial or full sales and the plan for each remaining lot. Select short term, swing or long term for each holding, then **Analyse** to compare your recorded stop and targets with completed provider candles and timeframe evidence. A review can flag a breached stop, a reached target, weakening/conflicting evidence, conditional hold readings or missing information. It never sends orders, records a sale automatically or changes your stop to fit a different style.
+
+Actual and paper records, MYR and USD totals stay separate. Entry fees are allocated proportionally across sold and remaining shares. Original stop risk is preserved separately from a later protective stop. Sale corrections and explicit record undo help fix manual-entry mistakes; they affect this local tracker only. Existing closed-trade journal records are preserved in an expandable section. Records stay in browser storage with dedicated validated backup/import; they are not synchronised across devices.
+
+Read [HOLDINGS-START-HERE.md](HOLDINGS-START-HERE.md) for the walkthrough and price-reference limits. Reviews use delayed completed closes, identify the source/date and expire after 30 minutes. Whole shares and individual buy lots are supported; dividends, automatic corporate-action reconciliation, taxes, unentered fees and FX conversion are excluded. Only ticker, market and interval requests leave the browser for candles. No AI account or new API key is required.
+
+v0.7 validation: 229 automated tests pass, including partial-sale accounting, corrections/undo, old-journal preservation, backup privacy, timeframe reference selection, invalid data and expired reviews. These checks validate implementation; they do not establish profitable trading performance.
 
 ## New in v0.6: deep stock research and IPO comparisons
 

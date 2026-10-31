@@ -45,7 +45,7 @@ function boot(saved={},options={}){
   }
   const elements=parse(page);
   const document={getElementById:id=>byId.get(id)||null,querySelectorAll:s=>elements.filter(e=>matches(e,s)),addEventListener(){},createElement:tag=>new Element(tag),body:{append(){}}};
-  const context=vm.createContext({document,window:{location:{protocol:options.protocol||'',hostname:options.hostname||''},addEventListener(){},scrollTo(){}},localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,String(v))},requestAnimationFrame:fn=>fn(),setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,Blob,URL:{createObjectURL:blob=>{const key='blob:'+downloads.length;downloads.push({blob,url:key});return key;},revokeObjectURL(){}},fetch:options.fetch||(()=>{throw new Error('Unexpected network request in offline UI test');})});
+  const context=vm.createContext({document,window:{location:{protocol:options.protocol||'',hostname:options.hostname||''},addEventListener(){},scrollTo(){}},localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,String(v))},requestAnimationFrame:fn=>fn(),setTimeout:options.runTimeouts?fn=>{queueMicrotask(fn);return 1;}:()=>1,clearTimeout(){},setInterval:()=>1,Blob,TextEncoder,AbortSignal,URL:{createObjectURL:blob=>{const key='blob:'+downloads.length;downloads.push({blob,url:key});return key;},revokeObjectURL(){}},fetch:options.fetch||(()=>{throw new Error('Unexpected network request in offline UI test');})});
   vm.runInContext(bundle,context,{filename:'src/bundle.js'});
   return {get:id=>byId.get(id),all:s=>document.querySelectorAll(s),storage,downloads};
 }
@@ -252,4 +252,23 @@ test('directory loading does not start a price scan and a checklist edit invalid
 test('missing Bursa directory credentials leave custom-list scanning available',async()=>{
   const ui=boot({}, {protocol:'https:',fetch:async url=>url.includes('/universe?')?response({error:{message:'Set ISAHAM_API_TOKEN for the Bursa directory'}},503):response(recentScreenData())});
   await settle();await ui.get('loadScreenDirectory').dispatch('click');assert.match(ui.get('screenDirectoryStatus').textContent,/ISAHAM_API_TOKEN/);assert.equal(ui.get('screenUniverse').value,'custom');assert.equal(ui.get('runScreen').disabled,false);assert.equal(ui.get('screenSymbols').disabled,false);
+});
+
+test('holdings entry and backup preserve earlier journal records and exclude gateway credentials',async()=>{
+  const legacy=[{date:'2026-10-20',symbol:'1155',currency:'MYR',entry:9,exit:10,quantity:100,fees:16,notes:'Earlier journal record'}];
+  const saved={bq_trades:JSON.stringify(legacy),bq_gatewayAccessCode:JSON.stringify('unit-test-only-secret')};
+  const ui=boot(saved);
+  for(const [id,value]of Object.entries({holdingSymbol:'1155',holdingEntryDate:'2020-01-02',holdingEntryPrice:'10',holdingQuantity:'100',holdingEntryFees:'8',holdingStop:'9',holdingOriginalStop:'9',holdingTarget1:'12',holdingTarget2:'14',holdingStyle:'short'}))ui.get(id).value=value;
+  await ui.get('holdingEntryForm').dispatch('submit');
+  const book=JSON.parse(ui.storage.get('bq_holdings_v1'));
+  assert.equal(book.positions.length,1);assert.equal(book.positions[0].quantity,100);assert.equal(book.positions[0].style,'short');
+  assert.equal(ui.storage.get('bq_trades'),JSON.stringify(legacy));
+  await ui.get('exportSaved').click();
+  const exported=JSON.parse(await ui.downloads.find(item=>item.blob).blob.text());
+  assert.deepEqual(exported.trades,legacy);assert.equal(exported.holdings.positions.length,1);
+  assert.equal(exported.holdings.positions[0].initialStopPrice,9);
+  assert.doesNotMatch(JSON.stringify(exported),/unit-test-only-secret|gatewayAccessCode/);
+  const reloaded=boot(Object.fromEntries(ui.storage));
+  assert.match(reloaded.get('holdingsRows').innerHTML,/1155/);
+  assert.equal(reloaded.storage.get('bq_trades'),JSON.stringify(legacy));
 });

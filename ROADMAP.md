@@ -1,6 +1,15 @@
 # BursaQuant roadmap
 
-Updated 30 October 2026. GitHub remains the source of truth; this personal site serves Bursa Malaysia and US stock research. Warrants are excluded. iSaham is optional and deferred while server access is unresolved.
+Updated 1 November 2026. GitHub remains the source of truth; this personal site serves Bursa Malaysia and US stock research. Warrants are excluded. iSaham is optional and deferred while server access is unresolved.
+
+## v0.7: a focused manual trading record
+
+- Trades & Holdings records long stock/ETF buy lots, partial/full sales, actual/paper status, trading style and a manually entered risk/target plan.
+- Style-based holding review uses daily plus 1H/4H/weekly context, with source/interval/freshness checks and conditional stop/target/hold/risk findings. Stops and targets never move automatically. No broker execution or AI service is connected to these records.
+- Costs, remaining quantity and realised/unrealised results are calculated from entered transactions. MYR/USD and actual/paper monetary totals remain separate. Original risk is distinct from a later stop.
+- Dedicated holdings backup/import, sale corrections and explicit undo preserve record usefulness. Earlier journal records remain intact in their own section.
+- The release passes 229 automated checks for existing behaviour, manual-record accounting, privacy, review evidence and asynchronous state handling.
+- Next: use the tracker with broker-confirmed records and review the clarity of the workflow. Further indicators, provider integrations, AI activation and automated IPO features remain deferred.
 
 ## v0.6 implementation
 
@@ -14,7 +23,7 @@ Updated 30 October 2026. GitHub remains the source of truth; this personal site 
 
 1. Walk through one Bursa stock and one US stock with the deeper report. Resolve missing data and ensure the chosen timeframe fits the intended holding period.
 2. Complete one IPO dossier using its final prospectus and two or more suitable listed peers. Review every source and unit before interpreting comparisons.
-3. Choose the AI provider/model and an enforced provider API-key/team spending limit. Enable one test question and verify its claims and usage. Add sourced IPO AI review after a document-extraction and citation workflow is ready.
+3. Keep AI deferred while the core research and manual tracking workflow is evaluated. It remains optional; no paid calls should be enabled without selecting a provider and spending controls.
 4. Record paper decisions before outcomes: trigger, invalidation, planned risk, costs and reasons to wait. Review realised results and mistakes; avoid optimising rules only around past winners.
 
 ## Research depth after v0.6
