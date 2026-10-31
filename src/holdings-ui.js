@@ -112,7 +112,7 @@ export function createHoldingsController(deps){
 
 export function mountHoldingsWorkspace(root,deps){
   const controller=createHoldingsController(deps),styles=deps.styles;
-  let editingId='',exitId='',editingExitId='',reviewId='',message='';
+  let editingId='',exitId='',editingExitId='',reviewId='',message='',editorBaseline='';
   const e=id=>document.getElementById(id);
   const field=(id,label,{type='text',value='',min,max,step,required=false,wide=false}={})=>`<label${wide?' class="holding-wide"':''}>${label}<input id="${id}" type="${type}" value="${holdingsEscape(value)}"${min!==undefined?' min="'+min+'"':''}${max!==undefined?' max="'+max+'"':''}${step?' step="'+step+'"':''}${required?' required':''}${type==='text'?' maxlength="160"':''}/></label>`;
   const styleOptions=selected=>Object.values(styles).map(profile=>`<option value="${holdingsEscape(profile.id)}"${profile.id===selected?' selected':''}>${holdingsEscape(profile.label)}</option>`).join('');
@@ -120,17 +120,33 @@ export function mountHoldingsWorkspace(root,deps){
   const entryIds={symbol:'holdingSymbol',market:'holdingMarket',assetType:'holdingAssetType',tradeType:'holdingTradeType',entryDate:'holdingEntryDate',entryPrice:'holdingEntryPrice',quantity:'holdingQuantity',entryFees:'holdingEntryFees',style:'holdingStyle',stopPrice:'holdingStop',target1:'holdingTarget1',target2:'holdingTarget2',initialStopPrice:'holdingOriginalStop',thesis:'holdingThesis',notes:'holdingNotes'};
   const numeric=new Set(['entryPrice','quantity','entryFees','stopPrice','target1','target2','initialStopPrice']);
   const entryLocked=['symbol','market','assetType','tradeType','entryDate','entryPrice','quantity','entryFees'];
+  const editorFingerprint=()=>JSON.stringify(Object.values(entryIds).map(id=>e(id).value));
   const say=text=>{message=text;e('holdingsStatus').textContent=text;};
   const list=items=>(items||[]).length?`<ul>${items.map(value=>`<li>${holdingsEscape(value)}</li>`).join('')}</ul>`:'<p class="muted small">No additional evidence supplied.</p>';
   function resetEditor(){
     editingId='';for(const [key,id]of Object.entries(entryIds)){e(id).value=({market:'MY',assetType:'Stock',tradeType:'actual',style:'swing',entryFees:0,entryDate:holdingsToday()})[key]??'';e(id).disabled=false;}
     e('holdingEditorTitle').textContent='Record a buy / existing holding';e('holdingEntryLock').textContent='';e('holdingSave').textContent='Save holding';
+    editorBaseline=editorFingerprint();
+  }
+  function beginDraft(input){
+    if(editorFingerprint()!==editorBaseline){say('You have unsaved holding details. Save or cancel those edits before starting a holding from Stock Analysis.');e('holdingEditor').scrollIntoView?.({behavior:'smooth',block:'start'});return false;}
+    if(!input||!['MY','US'].includes(input.market)||!['Stock','ETF'].includes(input.assetType)||!['short','swing','long'].includes(input.style)||!['actual','paper'].includes(input.tradeType)||typeof input.symbol!=='string'||!/^[A-Z0-9][A-Z0-9.-]{0,31}$/.test(input.symbol))throw new Error('Choose a supported stock or ETF before adding a holding.');
+    resetEditor();
+    for(const key of ['symbol','market','assetType','style','tradeType'])e(entryIds[key]).value=input[key];
+    // Chart prices and plans cannot establish an actual broker execution.
+    for(const key of ['entryDate','entryPrice','quantity','entryFees','stopPrice','target1','target2','initialStopPrice','thesis','notes'])e(entryIds[key]).value='';
+    exitId='';editingExitId='';e('holdingExitEditor').classList.add('hidden');e('holdingUndoPanel').classList.add('hidden');
+    e('holdingEditorTitle').textContent=`New ${input.symbol} holding · enter broker details`;
+    editorBaseline=editorFingerprint();
+    say(input.tradeType==='paper'?'Paper draft opened from demo analysis. Enter and review the details before saving; no trade has been recorded.':'Holding draft opened from Stock Analysis. Enter the actual buy date, filled price, quantity and fees from your broker, then review and save.');
+    e('holdingEditor').scrollIntoView?.({behavior:'smooth',block:'start'});e('holdingEntryDate').focus?.();return true;
   }
   function editPosition(id){
     const position=controller.getPosition(id);if(!position)return;
     editingId=id;for(const [key,fieldId]of Object.entries(entryIds)){e(fieldId).value=position[key]??'';e(fieldId).disabled=position.exits.length>0&&(entryLocked.includes(key)||key==='initialStopPrice');}
     // Original planned risk is a baseline, not a value to rewrite with each review.
     e('holdingOriginalStop').disabled=true;e('holdingEditorTitle').textContent=`Edit ${position.symbol} · plan and notes`;e('holdingEntryLock').textContent=position.exits.length?'Entry details are locked because sales have been recorded.':'Original stop is preserved; current stop and targets remain editable.';e('holdingSave').textContent='Save changes';
+    editorBaseline=editorFingerprint();
     e('holdingEditor').scrollIntoView?.({behavior:'smooth',block:'start'});say('Editing saved holding. Reviews update only after you save and analyse again.');
   }
   function renderStats(book){
@@ -215,5 +231,5 @@ export function mountHoldingsWorkspace(root,deps){
   };
   e('holdingsNew').onclick=()=>{resetEditor();e('holdingEditor').scrollIntoView?.({behavior:'smooth',block:'start'});};e('holdingCancelEdit').onclick=resetEditor;e('holdingCancelExit').onclick=()=>{exitId='';editingExitId='';e('holdingExitEditor').classList.add('hidden');e('holdingUndoPanel').classList.add('hidden');};e('holdingsExport').onclick=downloadBackup;
   root.addEventListener('click',onClick);root.addEventListener('change',onChange);controller.subscribe(render);resetEditor();render();
-  return {getBook:controller.getBook,refresh:controller.refresh,controller};
+  return {getBook:controller.getBook,refresh:controller.refresh,beginDraft,controller};
 }

@@ -1,6 +1,10 @@
-# BursaQuant — Stock Research Terminal (v0.7 trial)
+# BursaQuant — Stock Research Terminal (v0.7.1 trial)
 
 BursaQuant is a lightweight stock-research dashboard for US and Bursa Malaysia markets. It combines real OHLCV data with transparent technical rules, conditional entry/stop/TP scenarios and configurable position-risk calculations.
+
+## New in v0.7.1: add a holding from analysis
+
+Click **+ Add holding** on Stock Analysis to open an unsaved holding draft with the selected ticker, market, stock/ETF type and trading style. Enter the actual buy date, filled price, quantity and fees yourself; chart prices and modelled stops/targets are not copied into an execution record. Nothing is saved until you submit the form. Demo analysis defaults to a paper draft, unsupported instruments are excluded and an existing unsaved holding draft is preserved. The release passes 234 automated tests.
 
 ## New in v0.7: manual trades and holding reviews
 
