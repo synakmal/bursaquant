@@ -50,6 +50,13 @@ function boot(saved={},options={}){
   return {get:id=>byId.get(id),all:s=>document.querySelectorAll(s),storage,downloads};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+test('AI controls default hidden and their saved visibility preference makes no AI request',async()=>{
+  const ui=boot();assert.equal(ui.get('researchAIPanel').hidden,true);assert.equal(ui.get('showAiCoach').checked,false);
+  ui.get('showAiCoach').checked=true;await ui.get('showAiCoach').dispatch('change');assert.equal(ui.get('researchAIPanel').hidden,false);
+  assert.equal(ui.storage.get('bq_showAiCoach'),'true');
+  const reloaded=boot(Object.fromEntries(ui.storage));assert.equal(reloaded.get('researchAIPanel').hidden,false);
+  assert.equal(reloaded.get('showAiCoach').checked,true);assert.match(reloaded.get('researchAIStatus').textContent,/Check AI setup/);
+});
 test('focused workspace boots without IPO and preserves existing local records across navigation',async()=>{
   const legacy='[{"id":"saved-dossier","company":"Personal research"}]',ui=boot({bq_ipo_dossiers_v1:legacy});
   assert.equal(ui.get('page-ipo'),undefined);assert.equal(ui.get('ipoWorkspace'),undefined);

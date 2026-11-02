@@ -14,6 +14,8 @@ The report uses a seven-calendar-day stale limit, not a complete exchange holida
 
 ## Optional AI
 
+The AI Coach is hidden by default. Open Risk & Data Settings → Optional AI Coach to show its controls. This preference does not enable billed calls or configure an AI provider.
+
 Click **Check AI setup** in Deep Research. With the default release it reports that calls are disabled. Stock research and holding reviews work without it.
 
 When enabled later, asking AI explicitly sends your question and the technical report through your private gateway. Position quantities, capital, allocation settings, journal and access codes are excluded. Do not type private details into the question. AI answers refer to evidence IDs but still require checking. It cannot fetch current news, prospectuses or fundamentals. The first AI version accepts stock technical reports only.

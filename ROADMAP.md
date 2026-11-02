@@ -1,4 +1,4 @@
-# BursaQuant release scope
+# BursaQuant v1.0 personal release scope
 
 Updated 2 November 2026. GitHub remains the source of truth. This personal tool focuses on Bursa Malaysia and US stocks/ETFs, using the existing delayed Yahoo gateway.
 
@@ -14,6 +14,10 @@ Updated 2 November 2026. GitHub remains the source of truth. This personal tool 
 
 v0.7.3 removes IPO Research from the interface and browser bundle. Existing browser data is not deleted. Its fixed sidebar now scrolls independently, including on short windows, with keyboard focus and non-shrinking navigation content. v0.7.2 holding guidance and v0.7.1 analysis-to-holding drafts remain available.
 
+## Included in v1.0
+
+Holdings review overview; performance by preserved entry style/setup; optional exit reasons and lessons; manual-backup reminders. Optional stop/target/thesis gaps no longer block technical holding analysis. Deep Research is independent of AI; inactive AI controls are hidden by default. CSV/demo tools are secondary. Historical journal data remains preserved separately.
+
 ## Completion checks
 
 1. Check Bursa and US stock research with dated provider data; missing evidence must remain unavailable.
@@ -26,4 +30,4 @@ v0.7.3 removes IPO Research from the interface and browser bundle. Existing brow
 
 IPO research and warrants are excluded. iSaham remains optional and deferred; do not repeat blocked access checks without changed conditions. AI calls remain disabled until deliberately configured. Automated trading, new paid feeds, cloud synchronisation, continuous monitoring and alerts are outside this release.
 
-Possible later additions should solve an observed problem: a compact review queue for holdings, strategy performance by trading style, or easier backups. Keep any statistics tied to recorded trades and sufficient samples. Strategy profitability is not established by automated software checks.
+Further additions should solve an observed problem in the completed personal workflow. Keep any statistics tied to recorded trades and sufficient samples. Strategy profitability is not established by automated software checks.

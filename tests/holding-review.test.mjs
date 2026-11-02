@@ -60,8 +60,21 @@ test('a reached target below all-in entry cost is a planned exit, not an invente
   assert.equal(result.classification,'target_reached');assert.equal(result.label,'Target reached — review planned exit');assert.ok(result.pnl.unrealizedAfterEntryFees<0);assert.ok(result.risks.some(text=>text.includes('does not necessarily produce a profit')));
 });
 
-test('an absent stop produces an incomplete plan and is never invented from chart support',()=>{
-  const result=review(position({stopPrice:null,target1:null,target2:null}));assert.equal(result.classification,'plan_incomplete');assert.equal(result.plan.stopPrice,null);assert.ok(result.risks.some(text=>text.includes('No profit-taking target')));
+test('absent optional plan fields still produce a technical review without invented risk thresholds',()=>{
+  for(const fields of [{stopPrice:null,target1:null,target2:null,thesis:''},{stopPrice:undefined,target1:undefined,target2:undefined}]){
+    const p=position(fields),original=structuredClone(p),result=review(p);
+    assert.equal(result.classification,'hold_conditions');assert.match(result.label,/Technical hold view/);assert.match(result.summary,/numeric risk limit are not assessed/);
+    assert.equal(result.plan.stopPrice,null);assert.equal(result.plan.target1,null);assert.equal(result.plan.target2,null);assert.ok(result.risks.some(text=>text.includes('No profit-taking target')));assert.deepEqual(p,original);
+    assert.equal(result.priceReference.price,100);assert.equal(result.pnl.unrealizedAfterEntryFees,990);
+  }
+});
+
+test('missing optional plans do not suppress bearish, mixed or incomplete technical evidence',()=>{
+  const p=position({stopPrice:null,target1:null,target2:null,thesis:''});
+  const weak=review(p,[frame(),frame('1h',{direction:-1})]);assert.equal(weak.classification,'review_risk');assert.match(weak.summary,/bearish moving-average trend/);assert.match(weak.summary,/risk limit are not assessed/);
+  const mixed=review(p,[frame('1day',{direction:-1}),frame('1h')]);assert.equal(mixed.classification,'mixed');assert.match(mixed.summary,/evidence is mixed/);
+  const incomplete=review(p,[frame()]);assert.equal(incomplete.classification,'mixed');assert.match(incomplete.summary,/incomplete timeframe evidence/);assert.equal(incomplete.coverage.available,1);
+  const invalid=frame();invalid.meta.provider='demo';assert.equal(review(p,[invalid,frame('1h')]).classification,'insufficient');
 });
 
 test('a losing entry alone does not become a fabricated cut-loss instruction',()=>{

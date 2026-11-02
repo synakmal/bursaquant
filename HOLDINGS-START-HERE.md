@@ -42,13 +42,13 @@ The report starts with a conditional suggested response, measured reasons and wh
 | Closed record | No remaining shares | Position closed |
 | Protective stop | Reference close at or below your recorded stop | Cut loss / protect profit / review planned exit, depending on estimated remaining P/L |
 | Recorded target | Reference close at or above target 1 or 2 | Consider taking profit if estimated P/L is positive; otherwise review planned exit |
-| Missing risk plan | No numeric protective stop recorded | Complete the risk plan |
+| Optional plan gaps | No numeric protective stop or targets recorded | Continue technical analysis; numeric risk/target checks remain unavailable |
 | Missing context | Selected style's second timeframe unavailable | Wait / review — evidence incomplete |
 | Weak context | Context timeframe has a bearish moving-average trend | Reassess the holding |
 | Aligned technical case | Both selected trends bullish, neither MACD histogram negative | Hold while conditions remain intact |
 | Other combinations | Conflicting or mixed technical evidence | Wait / review — evidence mixed |
 
-Bullish trend means `close > SMA20 > SMA50`; bearish means `close < SMA20 < SMA50`. MACD histogram describes the difference between the MACD line and its signal line; a negative reading prevents the technical-hold classification. RSI, ATR, RVOL, SMA200 and estimated support/resistance add context but do not determine that current classification. Your configurable stock-rating weights are a separate checklist. A loss relative to entry alone does not trigger a cut-loss response.
+Bullish trend means `close > SMA20 > SMA50`; bearish means `close < SMA20 < SMA50`. MACD histogram describes the difference between the MACD line and its signal line; a negative reading prevents the technical-hold classification. RSI, ATR, RVOL, SMA200 and estimated support/resistance add context but do not determine that current classification. Your configurable stock-rating weights are a separate checklist. A loss relative to entry alone does not trigger a cut-loss response. A missing stop, target or thesis does not block analysis. Without a stop, a bullish result is labelled a technical hold view with risk limit not assessed. Only core holding identity/date/price/quantity and valid market evidence are required.
 
 Open **Common scenarios** for the trigger and conditional response for stops, targets, technical strength, estimated support, weakening/conflicting evidence and missing history. **Condition met** refers only to the displayed reference and evidence. Unavailable inputs are **Not evaluated**. Estimated chart support never replaces your entered stop. Time-based exits, trailing formulas and partial-sale percentages are not inferred from the style; record/apply your own rules.
 
@@ -64,9 +64,17 @@ Record a sale with its actual date, quantity, price and fees. A partial sale red
 
 Buy details are locked after a sale is recorded to protect the cost history. Stop, targets, style and notes can still be reviewed. You can correct a manually entered sale or explicitly undo that record; these actions update this tracker only. Monetary totals remain separated by currency and actual/paper status. Dividends, corporate-action adjustments, taxes, FX conversion and any fees you have not entered are excluded. Reconcile your manual records with your broker after splits or other corporate actions. Reviews expire after 30 minutes and are cleared when the record or gateway changes; click Analyse again for a new review.
 
+## Review overview, performance and lessons
+
+The holding overview identifies unreviewed or expired evidence, saved threshold findings and optional plan gaps. A missing stop is a limitation, not an analysis error or an instruction to sell. Analysis runs only when you request it.
+
+New holdings preserve the entry style and optional setup label separately from the editable style used for current analysis. Older records without entry attribution remain unknown. Performance groups actual/paper records, currency, entry style and setup. Realised P/L includes entered fees and partial sales. Win/loss/break-even counts and averages use fully closed buy lots once each; win rate includes break-even lots in its closed-lot denominator. Average R is shown only where original risk exists, with the contributing count. Results reflect your entered records, not a reconciled broker portfolio or future profitability.
+
+When recording or correcting a sale, optionally enter the exit reason and a lesson. They stay with that sale in history and backups.
+
 ## Backups and previous records
 
-The holdings workspace has JSON export and validated import. Import preserves existing record IDs rather than silently replacing them. Export before moving between browsers; there is no cloud synchronisation.
+The holdings workspace has JSON export and validated import. A reminder indicates changes since the last requested export and an older export date. Export initiation does not verify that the file was safely saved; check your Downloads folder. Backups remain manual, with no cloud synchronisation. Import preserves existing record IDs rather than silently replacing them. Export before moving between browsers; there is no cloud synchronisation.
 
 Earlier closed-trade journal records remain in their own expandable section below the holdings workspace. They are not silently converted into open positions or included twice in the holdings totals. The general research backup also includes the new holdings book; use the dedicated holdings backup/import for moving this tracker between browsers.
 

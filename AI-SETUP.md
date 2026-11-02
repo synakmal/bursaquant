@@ -1,6 +1,6 @@
 # Optional AI research coach
 
-Deep stock research and holding reviews work without an AI account. AI is disabled by default. No AI key, paid account or billing change was created for this release.
+Deep stock research and holding reviews work without an AI account. AI is disabled by default. The Coach controls are also hidden until you choose Show AI Coach controls in Risk & Data Settings. Showing them does not activate an API account, set server credentials or authorise paid calls. No AI key, paid account or billing change was created for this release.
 
 The coach explains a supplied daily / 4H / 1H technical report. It has no independent live quotes, news, filing retrieval, web browsing or broker tools. The AI endpoint accepts stock technical reports only.
 
