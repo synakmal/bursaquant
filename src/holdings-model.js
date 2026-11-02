@@ -60,11 +60,16 @@ export function validatePosition(input,{today}={}){
   if(!['Stock','ETF'].includes(assetType))throw new Error('Holdings support ordinary stocks and ETFs only.');
   if(!['short','swing','long'].includes(style))throw new Error('Choose short, swing or long trading style.');
   if(!['actual','paper'].includes(tradeType))throw new Error('Choose actual or paper trade.');
+  // Historical attribution is separate from the editable review style. An older
+  // record without this field stays unknown rather than inheriting today's style.
+  const entryStyle=input.entryStyle??null;
+  if(entryStyle!==null&&!['short','swing','long'].includes(entryStyle))throw new Error('Entry style must be short, swing, long or unknown.');
   const position={id:holdingId(input.id,'Holding ID'),symbol,market,currency,assetType,
     entryDate:holdingDate(input.entryDate,'Entry date',{today}),
     entryPrice:holdingNumber(input.entryPrice,'Entry price',{min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}),
     quantity:holdingNumber(input.quantity,'Quantity',{min:1,max:HOLDINGS_LIMITS.maxQuantity,integer:true}),
     entryFees:holdingNumber(input.entryFees,'Entry fees',{min:0,max:HOLDINGS_LIMITS.maxFees,fallback:0}),style,tradeType,
+    entryStyle,entrySetup:holdingText(input.entrySetup,'Entry setup',200),
     stopPrice:holdingNumber(input.stopPrice,'Stop price',{optional:true,min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}),
     target1:holdingNumber(input.target1,'First target',{optional:true,min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}),
     target2:holdingNumber(input.target2,'Second target',{optional:true,min:Number.MIN_VALUE,max:HOLDINGS_LIMITS.maxPrice}),
@@ -81,7 +86,7 @@ export function validatePosition(input,{today}={}){
   const ids=new Set();let sold=0;
   position.exits=(input.exits||[]).map(exit=>{
     if(!holdingObject(exit))throw new Error('Each exit must be an object.');
-    const clean={id:holdingId(exit.id,'Exit ID'),date:holdingDate(exit.date,'Exit date',{today}),quantity:holdingNumber(exit.quantity,'Exit quantity',{min:1,max:HOLDINGS_LIMITS.maxQuantity,integer:true}),price:holdingNumber(exit.price,'Exit price',{min:0,max:HOLDINGS_LIMITS.maxPrice}),fees:holdingNumber(exit.fees,'Exit fees',{min:0,max:HOLDINGS_LIMITS.maxFees,fallback:0})};
+    const clean={id:holdingId(exit.id,'Exit ID'),date:holdingDate(exit.date,'Exit date',{today}),quantity:holdingNumber(exit.quantity,'Exit quantity',{min:1,max:HOLDINGS_LIMITS.maxQuantity,integer:true}),price:holdingNumber(exit.price,'Exit price',{min:0,max:HOLDINGS_LIMITS.maxPrice}),fees:holdingNumber(exit.fees,'Exit fees',{min:0,max:HOLDINGS_LIMITS.maxFees,fallback:0}),reason:holdingText(exit.reason,'Exit reason',500),lesson:holdingText(exit.lesson,'Exit lesson',2000)};
     if(clean.date<position.entryDate)throw new Error('An exit cannot be earlier than the entry date.');
     if(clean.id&&ids.has(clean.id))throw new Error('Exit IDs must be unique within each holding.');
     ids.add(clean.id);sold+=clean.quantity;
@@ -163,6 +168,34 @@ export function summarizeHoldings(book,{quotes={},today}={}){
   }
   for(const types of Object.values(summary))for(const group of Object.values(types))for(const field of ['remainingCostBasis','realizedPnl','quotedMarketValue','quotedUnrealizedPnl'])group[field]=holdingRound(group[field]);
   return summary;
+}
+
+/** Recorded results only. Each fully closed buy lot is one performance outcome.
+ * Partial exits contribute realised cash P/L but never inflate the win count.
+ * All monetary groups retain their own currency and actual/paper attribution.
+ */
+export function buildHoldingPerformance(book,{today}={}){
+  const valid=validateHoldingsBook(book,{today}),groups=new Map();
+  for(const position of valid.positions){
+    const key=JSON.stringify([position.tradeType,position.currency,position.entryStyle,position.entrySetup]);
+    if(!groups.has(key))groups.set(key,{tradeType:position.tradeType,currency:position.currency,entryStyle:position.entryStyle,entrySetup:position.entrySetup,realizedPnl:0,closedPnl:0,openLots:0,closedLots:0,wins:0,losses:0,breakeven:0,winSum:0,lossSum:0,rSum:0,rCount:0});
+    const row=groups.get(key),totals=positionTotals(position,{today});
+    row.realizedPnl+=totals.realizedPnl;
+    if(totals.status==='open'){row.openLots++;continue;}
+    row.closedLots++;row.closedPnl+=totals.realizedPnl;
+    if(totals.realizedPnl>0){row.wins++;row.winSum+=totals.realizedPnl;}
+    else if(totals.realizedPnl<0){row.losses++;row.lossSum+=totals.realizedPnl;}
+    else row.breakeven++;
+    if(holdingFinite(totals.realizedRMultiple)){row.rCount++;row.rSum+=totals.realizedRMultiple;}
+  }
+  const styleOrder={short:0,swing:1,long:2};
+  return [...groups.values()].map(({winSum,lossSum,rSum,...row})=>({...row,
+    realizedPnl:holdingRound(row.realizedPnl),closedPnl:holdingRound(row.closedPnl),
+    winRate:row.closedLots?holdingRound(100*row.wins/row.closedLots):null,
+    avgWin:row.wins?holdingRound(winSum/row.wins):null,
+    avgLoss:row.losses?holdingRound(lossSum/row.losses):null,
+    avgR:row.rCount?holdingRound(rSum/row.rCount):null
+  })).sort((a,b)=>a.tradeType.localeCompare(b.tradeType)||a.currency.localeCompare(b.currency)||((styleOrder[a.entryStyle]??3)-(styleOrder[b.entryStyle]??3))||a.entrySetup.localeCompare(b.entrySetup));
 }
 
 /** Legacy closed trades remain legacy records: their recording date is not an execution date. */

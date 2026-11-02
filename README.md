@@ -1,8 +1,18 @@
-# BursaQuant — Stock Research Terminal (v0.7.3 trial)
+# BursaQuant — Stock Research Terminal (v1.0.0 personal release)
 
 BursaQuant is a lightweight stock-research dashboard for US and Bursa Malaysia markets. It combines real OHLCV data with transparent technical rules, conditional entry/stop/TP scenarios and configurable position-risk calculations.
 
-## New in v0.7.3: simpler workspace and scrollable navigation
+## Personal release v1.0.0
+
+The focused workflow is screen → analyse → record a buy → review the holding → record a sale → review results. Trades & Holdings now includes a review overview, performance by preserved entry style/setup, optional sale reasons/lessons and backup reminders. Actual/paper records and currencies stay separate; partial sales contribute realised P/L but only fully closed lots count as trade outcomes. Older records keep unknown entry attribution rather than borrowing the current review style.
+
+Missing optional stops, targets or thesis no longer block a technical holding review. The report assesses available trends/momentum and separately identifies unavailable numeric risk or target checks. Entered thresholds retain priority; invalid or stale market evidence does not receive a directional conclusion.
+
+Deep Research works without AI. The inactive AI Coach is hidden by default and can be shown from Risk & Data Settings; this visibility preference does not activate provider calls or billing. CSV/demo controls are grouped under Data tools. Existing older journal records remain separate and are not double-counted.
+
+Validation: 256 automated checks pass, including optional-plan technical reviews, entry attribution, partial-sale outcomes, backup reminders, cross-tab changes, AI visibility and existing provider/data gates. Hosted preview and production verification accompany the release.
+
+## Previous v0.7.3: simpler workspace and scrollable navigation
 
 IPO Research has been removed from the page, navigation, loaded styles and generated browser bundle. Existing browser records are left untouched. The sidebar now scrolls independently on short screens and supports keyboard focus, so every navigation item and the data status remain reachable. All 240 retained automated checks pass, including navigation and preservation of old browser records; tests for the removed IPO feature were removed with it.
 

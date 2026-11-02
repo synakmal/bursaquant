@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {HOLDINGS_LIMITS,validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings,normalizeLegacyTrades} from '../src/holdings-model.js';
+import {HOLDINGS_LIMITS,validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings,buildHoldingPerformance,normalizeLegacyTrades} from '../src/holdings-model.js';
 const today='2026-10-30',options={today};
 const lot=(changes={})=>({id:'lot_1',symbol:'1155',market:'MY',currency:'MYR',entryDate:'2026-10-01',entryPrice:10,quantity:1000,entryFees:20,style:'swing',stopPrice:9,target1:12,target2:14,exits:[],...changes});
 const sale=(changes={})=>({id:'sale_1',date:'2026-10-20',quantity:400,price:12,fees:8,...changes});
@@ -90,4 +90,45 @@ test('summaries separate currencies and paper records, showing incomplete quote 
 test('legacy closed trades keep recording dates without inventing entry/exit dates or silently importing invalid rows',()=>{
   const result=normalizeLegacyTrades([{date:'2026-10-01',symbol:'aapl',currency:'USD',entry:10,exit:12,quantity:10,fees:1,notes:'old',token:'never'},{symbol:'bad',currency:'MYR',entry:10,exit:12,quantity:-1}]);
   assert.equal(result.records.length,1);assert.equal(result.rejected.length,1);assert.equal(result.records[0].realizedPnl,19);assert.equal(result.records[0].recordedAt,'2026-10-01');assert.equal(result.records[0].entryDate,null);assert.equal(result.records[0].exitDate,null);assert.ok(!Object.hasOwn(result.records[0],'token'));
+});
+
+test('entry attribution and exit reflections round-trip while old backups keep unknown historical style',()=>{
+  const old=validatePosition(lot({style:'long',exits:[sale()]}),options);
+  assert.equal(old.entryStyle,null);assert.equal(old.entrySetup,'');assert.equal(old.exits[0].reason,'');assert.equal(old.exits[0].lesson,'');
+  const source=book([lot({entryStyle:'short',entrySetup:'  Support pullback  ',style:'long',exits:[sale({reason:'  Target filled  ',lesson:'Waited for confirmation.',accessCode:'never-export'})]})]);
+  const restored=parseHoldingsBackup(serializeHoldingsBook(source,options),options).positions[0];
+  assert.equal(restored.style,'long');assert.equal(restored.entryStyle,'short');assert.equal(restored.entrySetup,'Support pullback');assert.equal(restored.exits[0].reason,'Target filled');assert.equal(restored.exits[0].lesson,'Waited for confirmation.');assert.ok(!Object.hasOwn(restored.exits[0],'accessCode'));
+});
+
+test('entry attribution and reflections validate bounded text without accepting private nested fields',()=>{
+  for(const change of [{entryStyle:'intraday'},{entryStyle:''},{entrySetup:'a'.repeat(201)},{entrySetup:{name:'bad'}},{exits:[sale({reason:'a'.repeat(501)})]},{exits:[sale({lesson:'a'.repeat(2001)})]},{exits:[sale({lesson:123})]}])assert.throws(()=>validatePosition(lot(change),options));
+  assert.equal(validatePosition(lot({entryStyle:null}),options).entryStyle,null);
+});
+
+test('performance counts final buy-lot outcomes once, includes partial realised P/L and uses known original risk only',()=>{
+  const base={entryPrice:10,quantity:100,entryFees:0,initialStopPrice:9,entryStyle:'short',entrySetup:'Pullback'};
+  const winning=lot({...base,id:'win',entryFees:10,exits:[sale({id:'win_a',quantity:40,price:12,fees:2}),sale({id:'win_b',quantity:60,price:11,fees:3})]});
+  const losing=lot({...base,id:'loss',initialStopPrice:null,exits:[sale({id:'loss_a',quantity:100,price:9,fees:0})]});
+  const flat=lot({...base,id:'flat',exits:[sale({id:'flat_a',quantity:100,price:10,fees:0})]});
+  const partial=lot({...base,id:'partial',entryFees:10,exits:[sale({id:'partial_a',quantity:40,price:12,fees:2})]});
+  const open=lot({...base,id:'open'}),input=book([winning,losing,flat,partial,open]),before=JSON.stringify(input);
+  const rows=buildHoldingPerformance(input,options);assert.equal(rows.length,1);const row=rows[0];
+  assert.equal(row.realizedPnl,99);assert.equal(row.closedPnl,25);assert.equal(row.closedLots,3);assert.equal(row.openLots,2);assert.equal(row.wins,1);assert.equal(row.losses,1);assert.equal(row.breakeven,1);
+  assert.ok(Math.abs(row.winRate-100/3)<1e-9);assert.equal(row.avgWin,125);assert.equal(row.avgLoss,-100);assert.equal(row.rCount,2);assert.ok(Math.abs(row.avgR-(125/110)/2)<1e-9);
+  assert.equal(JSON.stringify(input),before);assert.ok(!Object.hasOwn(row,'winSum'));
+});
+
+test('performance separates actual/paper, currency, original style and setup without retrospectively inferring legacy attribution',()=>{
+  const data=book([
+    lot({id:'legacy',style:'long'}),
+    lot({id:'known',style:'long',entryStyle:'short',entrySetup:'A'}),
+    lot({id:'setup_b',entryStyle:'short',entrySetup:'B'}),
+    lot({id:'paper',tradeType:'paper',entryStyle:'short',entrySetup:'A'}),
+    lot({id:'usd',symbol:'AAPL',market:'US',currency:'USD',entryStyle:'short',entrySetup:'A'})
+  ]);
+  const rows=buildHoldingPerformance(data,options);assert.equal(rows.length,5);
+  assert.equal(rows.filter(row=>row.entryStyle===null).length,1);assert.equal(rows.find(row=>row.entryStyle===null).entrySetup,'');
+  assert.equal(rows.filter(row=>row.currency==='USD').length,1);assert.equal(rows.filter(row=>row.tradeType==='paper').length,1);
+  for(const row of rows){assert.equal(row.closedLots,0);assert.equal(row.winRate,null);assert.equal(row.avgWin,null);assert.equal(row.avgLoss,null);assert.equal(row.avgR,null);assert.equal(row.realizedPnl,0);}
+  assert.deepEqual(buildHoldingPerformance(book([]),options),[]);
 });

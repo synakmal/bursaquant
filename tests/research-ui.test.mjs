@@ -34,7 +34,7 @@ function mount(t,overrides={}){
   t.after(()=>{globalThis.document=previousDocument;globalThis.setTimeout=previousTimer;});
   let selection={key:'US:AAPL:settings1',symbol:'AAPL',market:'US',name:'Apple Inc.',currency:'USD',canLoad:true,mode:'swing',strategy:{name:'Balanced technical'}};
   const calls=[],requests=[],downloads=[],reports=[];
-  const deps={getSelection:()=>selection,fetchMarket:async(_selection,timeframe)=>{requests.push(timeframe);return fixture(timeframe);},analyseFrame:bars=>analyse(bars),evaluateDaily:bars=>evaluateAccumulation(bars),sizePlans:analysis=>analysis.plans.map(plan=>({...plan,position:sizePosition(plan,DEFAULT_SETTINGS,'USD',1)})),buildReport:input=>{const result=buildDeepReport(input);reports.push(result);return result;},getAIStatus:async()=>({ready:true,message:'AI available.',model:'configured/model'}),sendAI:async value=>{calls.push(value);return {answer:'Review this evidence.',model:'configured/model',generatedAt:new Date().toISOString()};},download:(...args)=>downloads.push(args),...overrides};
+  const deps={isAIVisible:()=>true,getSelection:()=>selection,fetchMarket:async(_selection,timeframe)=>{requests.push(timeframe);return fixture(timeframe);},analyseFrame:bars=>analyse(bars),evaluateDaily:bars=>evaluateAccumulation(bars),sizePlans:analysis=>analysis.plans.map(plan=>({...plan,position:sizePosition(plan,DEFAULT_SETTINGS,'USD',1)})),buildReport:input=>{const result=buildDeepReport(input);reports.push(result);return result;},getAIStatus:async()=>({ready:true,message:'AI available.',model:'configured/model'}),sendAI:async value=>{calls.push(value);return {answer:'Review this evidence.',model:'configured/model',generatedAt:new Date().toISOString()};},download:(...args)=>downloads.push(args),...overrides};
   const root=new Element(),workspace=mountResearchWorkspace(root,deps);
   return {root,get:id=>elements.get(id),workspace,calls,requests,downloads,reports,setSelection:value=>{selection={...selection,...value};}};
 }
@@ -55,6 +55,17 @@ test('AI context handles zero-quantity positions and unavailable sizing without 
 test('mount performs no network requests and requires an explicit report action',t=>{
   const ui=mount(t);assert.deepEqual(ui.requests,[]);assert.deepEqual(ui.calls,[]);assert.equal(ui.get('askResearchAI').disabled,true);assert.equal(ui.get('exportDeepResearch').disabled,true);
   assert.match(ui.get('deepSelection').textContent,/AAPL/);assert.match(ui.root.innerHTML,/No deep report/);
+});
+
+test('hidden AI controls cannot check or send requests and do not prevent deep analysis',async t=>{
+  let visible=false,checks=0;const ui=mount(t,{isAIVisible:()=>visible,getAIStatus:async()=>{checks++;return {ready:true,message:'Configured'};}});
+  assert.equal(ui.get('researchAIPanel').hidden,true);
+  await ui.workspace.run();assert.equal(ui.reports.length,1);
+  await ui.get('checkResearchAI').onclick();await ui.get('askResearchAI').onclick();assert.equal(checks,0);assert.equal(ui.calls.length,0);
+  visible=true;ui.workspace.refresh();assert.equal(ui.get('researchAIPanel').hidden,false);
+  await ui.get('checkResearchAI').onclick();assert.equal(checks,1);assert.equal(ui.get('askResearchAI').disabled,false);
+  visible=false;ui.workspace.refresh();assert.equal(ui.get('researchAIPanel').hidden,true);assert.equal(ui.get('askResearchAI').disabled,true);
+  await ui.get('askResearchAI').onclick();assert.equal(ui.calls.length,0);
 });
 
 test('building a report loads three timeframes sequentially without automatically calling AI',async t=>{

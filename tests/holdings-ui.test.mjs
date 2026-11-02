@@ -31,6 +31,52 @@ test('buy records are normalised, persisted and survive a new controller',()=>{
   const copy=next.getBook();copy.positions[0].quantity=1;assert.equal(next.getBook().positions[0].quantity,100);
 });
 
+test('entry attribution stays fixed when the review style or edited form changes',()=>{
+  const s=setup(),saved=s.controller.savePosition(lot({style:'short',entrySetup:'Support pullback'}));
+  assert.equal(saved.entryStyle,'short');assert.equal(saved.entrySetup,'Support pullback');
+  s.controller.setStyle(saved.id,'long');
+  const edited=s.controller.savePosition({...s.controller.getPosition(saved.id),entryStyle:'long',entrySetup:'A different winning setup'});
+  assert.equal(edited.style,'long');assert.equal(edited.entryStyle,'short');assert.equal(edited.entrySetup,'Support pullback');
+  const old={...saved,id:'old_lot'};delete old.entryStyle;delete old.entrySetup;
+  s.controller.importBackup(JSON.stringify({schemaVersion:1,positions:[old]}));
+  assert.equal(s.controller.setStyle(old.id,'long').entryStyle,null);
+});
+
+test('backup reminders distinguish export content from a requested download and expire after seven days',()=>{
+  let clock=Date.parse('2026-11-01T02:00:00Z');const s=setup({now:()=>clock}),saved=s.controller.savePosition(lot({thesis:'Private thesis never belongs in reminder metadata'}));
+  const text=s.controller.exportBackup();assert.equal(s.controller.getBackupState().dirty,true);
+  assert.equal(s.controller.markBackupRequested(text+' '),false);assert.equal(s.controller.getBackupState().dirty,true);
+  assert.equal(s.controller.markBackupRequested(text),true);assert.equal(s.controller.getBackupState().needsBackup,false);
+  const metadata=s.values.get('bq_holdings_backup_v1');assert.ok(metadata.length<200);assert.doesNotMatch(metadata,/Private|1155|quantity/);
+  const next=createHoldingsController(s.deps);assert.equal(next.getBackupState().needsBackup,false);
+  clock+=7*86400000;assert.equal(next.getBackupState().overdue,true);assert.equal(next.getBackupState().needsBackup,true);
+  s.controller.savePosition({...saved,notes:'New observation'});assert.equal(s.controller.getBackupState().dirty,true);
+});
+
+test('reminder metadata failures do not change holdings or claim a completed backup',()=>{
+  const values=new Map(),s=setup({storage:{getItem:key=>values.get(key)??null,setItem:(key,value)=>{if(key==='bq_holdings_backup_v1')throw new Error('metadata quota');values.set(key,value);}}});
+  s.controller.savePosition(lot());const before=JSON.stringify(s.controller.getBook());
+  assert.equal(s.controller.markBackupRequested(s.controller.exportBackup()),false);
+  assert.equal(JSON.stringify(s.controller.getBook()),before);assert.equal(s.controller.getBackupState().needsBackup,true);assert.match(s.controller.getBackupState().metadataError,/could not be stored/);
+});
+
+test('changes from another tab invalidate advice and cannot be overwritten or marked backed up by an old controller',async()=>{
+  const s=setup(),saved=s.controller.savePosition(lot()),next=createHoldingsController(s.deps);
+  await s.controller.analysePosition(saved.id);assert.ok(s.controller.getReview(saved.id));
+  next.savePosition({...saved,notes:'A newer change from another tab'});const external=s.values.get('bq_holdings_v1');
+  assert.equal(s.controller.getBackupState().externalChanges,true);assert.equal(s.controller.getBackupState().needsBackup,true);
+  assert.equal(s.controller.getReview(saved.id),null);const count=s.requests.length;
+  await assert.rejects(s.controller.analysePosition(saved.id),/another tab/);assert.equal(s.requests.length,count);
+  assert.equal(s.controller.markBackupRequested(s.controller.exportBackup()),false);
+  assert.throws(()=>s.controller.savePosition({...saved,notes:'Old overwrite'}),/another tab/);assert.equal(s.values.get('bq_holdings_v1'),external);
+});
+
+test('an external tab edit during a request discards its result instead of showing old-position guidance',async()=>{
+  const pending=deferred(),s=setup({fetchMarket:()=>pending.promise}),saved=s.controller.savePosition(lot()),next=createHoldingsController(s.deps);
+  const running=s.controller.analysePosition(saved.id);next.savePosition({...saved,quantity:200});pending.resolve({bars:[{close:11}],meta:{}});
+  assert.equal(await running,null);assert.equal(s.controller.getReview(saved.id),null);assert.equal(s.received.length,0);
+});
+
 test('storage failures leave previous holdings and pending form values unchanged',()=>{
   const s=setup(),saved=s.controller.savePosition(lot()),before=JSON.stringify(s.controller.getBook());s.failStorage();
   assert.throws(()=>s.controller.savePosition({...saved,quantity:200}),/could not save/);
@@ -181,6 +227,28 @@ function mount(t,overrides={}){
 
 test('workspace boots without requests and exposes manual record/backup controls',t=>{
   const s=mount(t);assert.match(s.root.innerHTML,/Record buy \/ holding/);assert.match(s.get('holdingsRows').innerHTML,/No open holdings/);assert.equal(s.requests.length,0);assert.ok(s.get('holdingsImport'));assert.ok(s.get('holdingExitForm'));
+});
+
+test('overview treats optional plan gaps as context while still allowing technical analysis',async t=>{
+  const s=mount(t),saved=s.workspace.controller.savePosition(lot({stopPrice:null,target1:null,target2:null,initialStopPrice:null,thesis:''}));
+  assert.match(s.get('holdingsOverview').innerHTML,/Needs analysis/);assert.match(s.get('holdingsOverview').innerHTML,/Optional plan context not recorded/);
+  assert.match(s.get('holdingsOverview').innerHTML,/data-holding-action="analyse"/);
+  await s.workspace.controller.analysePosition(saved.id);
+  assert.equal(s.requests.length,2);assert.match(s.get('holdingsOverview').innerHTML,/Technical hold conditions intact/);assert.doesNotMatch(s.get('holdingsOverview').innerHTML,/No numeric protective stop|cannot analyse/);
+  assert.match(s.get('holdingsBackupStatus').textContent,/Records have changed/);
+});
+
+test('performance and sale history expose entry attribution and outcome notes without counting partial exits as wins',t=>{
+  const s=mount(t),saved=s.workspace.controller.savePosition(lot({entrySetup:'<script>entry setup</script>',style:'short'}));
+  let sold=s.workspace.controller.recordExit(saved.id,{date:'2020-01-03',quantity:40,price:12,fees:2,reason:'<img src=x>',lesson:'Followed the first target.'});
+  s.workspace.controller.setStyle(saved.id,'long');
+  let html=s.get('holdingsPerformance').innerHTML;assert.match(html,/Short term/);assert.match(html,/1 open \/ 0 closed/);assert.match(html,/&lt;script&gt;entry setup/);assert.doesNotMatch(html,/<script>/);
+  assert.match(s.get('holdingHistory').innerHTML,/&lt;img src=x&gt;/);assert.match(s.get('holdingHistory').innerHTML,/Followed the first target/);
+  s.root.handlers.click(action({holdingAction:'correct-sale',id:saved.id,exitId:sold.exits[0].id}));
+  assert.equal(s.get('holdingExitReason').value,'<img src=x>');assert.equal(s.get('holdingExitLesson').value,'Followed the first target.');
+  s.workspace.controller.recordExit(saved.id,{date:'2020-01-04',quantity:60,price:11,fees:2});html=s.get('holdingsPerformance').innerHTML;
+  assert.match(html,/0 open \/ 1 closed/);assert.match(html,/100%/);assert.match(html,/1 \/ 0 \/ 0/);
+  assert.equal(s.workspace.controller.getPosition(saved.id).entryStyle,'short');
 });
 
 test('workspace keeps actual/paper and MYR/USD totals separate and escapes research notes',t=>{

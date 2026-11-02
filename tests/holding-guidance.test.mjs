@@ -50,8 +50,25 @@ test('a losing holding alone does not become a cut-loss trigger',()=>{
 });
 
 test('absent risk thresholds remain unknown and are never invented from chart support',()=>{
-  const result=guidance(position({stopPrice:null,target1:null,target2:null})).result;
-  assert.equal(result.action.code,'complete_plan');assert.equal(result.scenarios.find(row=>row.id==='protective-stop').trigger,'Stop not recorded');assert.equal(result.scenarios.find(row=>row.id==='protective-stop').active,null);assert.ok(result.missing.some(text=>text.includes('No target levels')));
+  const result=guidance(position({stopPrice:null,target1:null,target2:null,thesis:''})).result;
+  assert.equal(result.action.code,'hold');assert.match(result.action.label,/Technical hold view/);assert.match(result.action.reason,/without a numeric risk-limit check/);assert.match(result.action.caveat,/Optional levels do not block/);
+  assert.equal(result.scenarios.find(row=>row.id==='protective-stop').trigger,'Stop not recorded');assert.equal(result.scenarios.find(row=>row.id==='protective-stop').active,null);assert.ok(result.missing.some(text=>text.includes('No target levels')));
+  assert.equal(result.scenarios.find(row=>row.id==='constructive-hold').active,true);assert.match(result.scenarios.find(row=>row.id==='constructive-hold').response,/risk limit is not assessed/);
+  assert.doesNotMatch(JSON.stringify(result.action),/recorded stop is intact|Complete the risk plan|cannot determine whether your position risk/);
+});
+
+test('optional plan gaps retain technical reassessment and incomplete-data qualifications',()=>{
+  const p=position({stopPrice:null,target1:null,target2:null});
+  const weak=guidance(p,[frame(),frame('1h',{direction:-1})]).result;assert.equal(weak.action.code,'reassess');assert.match(weak.action.reason,/bearish moving-average trend/);assert.match(weak.action.caveat,/risk-limit check is not assessed/);
+  const missing=guidance(p,[frame()]).result;assert.equal(missing.action.code,'wait_review');assert.equal(missing.scenarios.find(row=>row.id==='constructive-hold').active,null);assert.equal(missing.scenarios.find(row=>row.id==='missing-evidence').active,true);
+  const invalid=guidance({...p,stopPrice:NaN}).result;assert.equal(invalid.action.code,'no_recommendation');
+});
+
+test('supplied exit thresholds retain priority while other optional levels are absent',()=>{
+  const target=guidance(position({stopPrice:null,target1:95,target2:null,thesis:''})).result;
+  assert.equal(target.action.code,'take_profit');assert.match(target.action.reason,/first target USD 95/);assert.match(target.action.caveat,/risk-limit check is not assessed/);
+  const stop=guidance(position({entryPrice:110,stopPrice:101,target1:null,target2:null})).result;
+  assert.equal(stop.action.code,'cut_loss');assert.match(stop.action.reason,/protective stop USD 101/);assert.equal(stop.scenarios.find(row=>row.id==='target-1').active,null);
 });
 
 test('bearish and incomplete context retain their upstream review decisions',()=>{

@@ -11,15 +11,18 @@ export function researchAiContext(report){
 }
 
 export function mountResearchWorkspace(root,deps){
-  root.innerHTML=`<div class="card research-controls"><div class="card-title-row"><h3 id="deepSelection">Selected stock</h3><span class="badge badge-outline">Daily · 4H · 1H</span></div><p class="muted small">Choose a ticker in Stock Analysis, then build a report from three separate sets of provider candles. Requests run sequentially. Unavailable timeframes remain visible.</p><div class="row-buttons"><button id="runDeepResearch" class="btn primary">Build deep report →</button><button id="stopDeepResearch" class="btn ghost" disabled>Pause</button><button id="exportDeepResearch" class="btn secondary" disabled>↓ Export report</button></div><p id="deepProgress" class="research-status" role="status" aria-live="polite">No deep report built yet.</p></div><div id="deepReport"></div><div class="card space-top"><div class="card-title-row"><h3>AI Research Coach</h3><button id="checkResearchAI" class="btn sm ghost">Check AI setup</button></div><p id="researchAIStatus" class="muted small" role="status">AI is optional. Check the server setup before asking a question.</p><label class="research-question" for="researchQuestion">Ask about this report<textarea id="researchQuestion" rows="3" maxlength="1000" placeholder="What supports the long thesis, what contradicts it, and what confirmation is missing?"></textarea></label><div class="row-buttons research-prompts"><button class="btn sm ghost" data-research-prompt="Challenge the bullish thesis using the evidence. What would invalidate it?">Challenge my thesis</button><button class="btn sm ghost" data-research-prompt="Explain the timeframe conflicts and what confirmation remains missing.">Explain conflicts</button><button class="btn sm ghost" data-research-prompt="Explain the daily accumulation checklist, including contradictory and missing evidence.">Check accumulation</button></div><button id="askResearchAI" class="btn primary" disabled>Ask AI about this report</button><p class="disclaimer">Sends this report and your question to the configured AI provider only when you click Ask. Access codes, your journal and position-size settings are excluded. The AI has no live web or news access. It explains evidence; it cannot establish future profit.</p><div id="researchAIAnswer" class="research-answer" role="status" aria-live="polite">Build a report first. Paid AI calls remain disabled until you configure the server.</div></div>`;
+  root.innerHTML=`<div class="card research-controls"><div class="card-title-row"><h3 id="deepSelection">Selected stock</h3><span class="badge badge-outline">Daily · 4H · 1H</span></div><p class="muted small">Choose a ticker in Stock Analysis, then build a report from three separate sets of provider candles. Requests run sequentially. Unavailable timeframes remain visible.</p><div class="row-buttons"><button id="runDeepResearch" class="btn primary">Build deep report →</button><button id="stopDeepResearch" class="btn ghost" disabled>Pause</button><button id="exportDeepResearch" class="btn secondary" disabled>↓ Export report</button></div><p id="deepProgress" class="research-status" role="status" aria-live="polite">No deep report built yet.</p></div><div id="deepReport"></div><div id="researchAIPanel" class="card space-top" hidden><div class="card-title-row"><h3>AI Research Coach</h3><button id="checkResearchAI" class="btn sm ghost">Check AI setup</button></div><p id="researchAIStatus" class="muted small" role="status">AI is optional. Check the server setup before asking a question.</p><label class="research-question" for="researchQuestion">Ask about this report<textarea id="researchQuestion" rows="3" maxlength="1000" placeholder="What supports the long thesis, what contradicts it, and what confirmation is missing?"></textarea></label><div class="row-buttons research-prompts"><button class="btn sm ghost" data-research-prompt="Challenge the bullish thesis using the evidence. What would invalidate it?">Challenge my thesis</button><button class="btn sm ghost" data-research-prompt="Explain the timeframe conflicts and what confirmation remains missing.">Explain conflicts</button><button class="btn sm ghost" data-research-prompt="Explain the daily accumulation checklist, including contradictory and missing evidence.">Check accumulation</button></div><button id="askResearchAI" class="btn primary" disabled>Ask AI about this report</button><p class="disclaimer">Sends this report and your question to the configured AI provider only when you click Ask. Access codes, your journal and position-size settings are excluded. The AI has no live web or news access. It explains evidence; it cannot establish future profit.</p><div id="researchAIAnswer" class="research-answer" role="status" aria-live="polite">Build a report first. Paid AI calls remain disabled until you configure the server.</div></div>`;
   const el=id=>document.getElementById(id);
+  const aiVisible=()=>deps.isAIVisible?.()===true;
   let report=null,reportKey='',running=false,paused=false,sequence=0,aiReady=false,aiBusy=false,aiSequence=0,setupSequence=0,connectionKey='';
   const key=()=>deps.getSelection().key;
   const valid=()=>report&&reportKey===key()&&report.counts.available>0;
   const money=(value,currency)=>`${researchEscape(currency)} ${researchNumber(value,value<1?4:2)}`;
   const list=items=>(items||[]).length?`<ul>${items.map(item=>`<li>${researchEscape(item)}</li>`).join('')}</ul>`:'<p class="muted small">No qualifying evidence in this category.</p>';
-  function buttons(){el('runDeepResearch').disabled=running;el('stopDeepResearch').disabled=!running;el('exportDeepResearch').disabled=!report||reportKey!==key();el('askResearchAI').disabled=!valid()||!aiReady||aiBusy||running;}
+  function buttons(){el('runDeepResearch').disabled=running;el('stopDeepResearch').disabled=!running;el('exportDeepResearch').disabled=!report||reportKey!==key();el('askResearchAI').disabled=!aiVisible()||!valid()||!aiReady||aiBusy||running;}
   function refresh(){
+    el('researchAIPanel').hidden=!aiVisible();
+    if(!aiVisible()){aiReady=false;aiSequence++;setupSequence++;}
     const selection=deps.getSelection();
     const connection=selection.connectionKey||selection.key;
     if(connectionKey!==connection){aiReady=false;setupSequence++;connectionKey=connection;el('researchAIStatus').textContent='Connection changed. Check AI setup for this gateway.';}
@@ -72,20 +75,20 @@ export function mountResearchWorkspace(root,deps){
     finally{running=false;refresh();}
   }
   async function checkAI(){
-    refresh();const seq=++setupSequence,connection=connectionKey;
+    refresh();if(!aiVisible())return;const seq=++setupSequence,connection=connectionKey;
     el('researchAIStatus').textContent='Checking the private AI endpoint…';el('checkResearchAI').disabled=true;
-    try{const state=await deps.getAIStatus();const selection=deps.getSelection();if(seq!==setupSequence||connection!==(selection.connectionKey||selection.key))return;aiReady=state.ready===true;el('researchAIStatus').textContent=state.message+(state.model?' Model: '+state.model+'.':'');}
+    try{const state=await deps.getAIStatus();const selection=deps.getSelection();if(!aiVisible()||seq!==setupSequence||connection!==(selection.connectionKey||selection.key))return;aiReady=state.ready===true;el('researchAIStatus').textContent=state.message+(state.model?' Model: '+state.model+'.':'');}
     catch(error){if(seq===setupSequence){aiReady=false;el('researchAIStatus').textContent='AI setup check failed: '+error.message;}}
     finally{el('checkResearchAI').disabled=false;buttons();}
   }
   async function askAI(){
-    if(!valid()||!aiReady||aiBusy||running)return;
+    if(!aiVisible()||!valid()||!aiReady||aiBusy||running)return;
     const question=el('researchQuestion').value.trim()||'Explain the supporting evidence, contrary evidence, missing inputs and conditions that would invalidate this thesis.';
     if(question.length>1000)return;
     const contextKey=key(),seq=++aiSequence;aiBusy=true;buttons();el('researchAIAnswer').textContent='Reviewing the supplied evidence…';
     try{
       const result=await deps.sendAI({question,context:researchAiContext(report)});
-      if(contextKey!==key()||seq!==aiSequence)return;
+      if(!aiVisible()||contextKey!==key()||seq!==aiSequence)return;
       el('researchAIAnswer').textContent=result.answer+`\n\n${result.truncated?'Response reached the output limit and may be incomplete.\n':''}Model: ${result.model} · Generated ${result.generatedAt}\nScope: supplied report only; no live web, news or independent verification.`;
     }catch(error){if(contextKey===key()&&seq===aiSequence)el('researchAIAnswer').textContent='AI unavailable: '+error.message;}
     finally{aiBusy=false;buttons();}
