@@ -50,6 +50,14 @@ function boot(saved={},options={}){
   return {get:id=>byId.get(id),all:s=>document.querySelectorAll(s),storage,downloads};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+test('focused workspace boots without IPO and preserves existing local records across navigation',async()=>{
+  const legacy='[{"id":"saved-dossier","company":"Personal research"}]',ui=boot({bq_ipo_dossiers_v1:legacy});
+  assert.equal(ui.get('page-ipo'),undefined);assert.equal(ui.get('ipoWorkspace'),undefined);
+  assert.doesNotMatch(bundle,/mountIpoWorkspace|BQIpo|ipo_dossiers/);
+  const navigation=ui.all('.nav-item');assert.equal(navigation.length,7);
+  for(const button of navigation){await button.dispatch('click');assert.equal(ui.get('page-'+button.dataset.page).classList.contains('active'),true);}
+  assert.equal(ui.storage.get('bq_ipo_dossiers_v1'),legacy);
+});
 const response=(data,status=200)=>({ok:status>=200&&status<300,status,json:async()=>data});
 function providerData(price=100){
   const bars=Array.from({length:230},(_,i)=>({time:1700000000+i*86400,open:price+i*.01,high:price+i*.01+1,low:price+i*.01-1,close:price+i*.01+.1,volume:10000+i}));
