@@ -3,7 +3,6 @@ import {evaluateAccumulation,DEFAULT_SCREEN_SETTINGS} from './screener.js';
 import {screenInstrument,parseScreenSymbols,parseScreenListFile,createScreenRun,screenCoverage,scanDailyBatch} from './scan-runner.js';
 import {buildDeepReport} from './deep-analysis.js';
 import {mountResearchWorkspace} from './research-ui.js';
-import {mountIpoWorkspace} from './ipo.js';
 import {validatePosition,positionTotals,validateHoldingsBook,parseHoldingsBackup,serializeHoldingsBook,summarizeHoldings} from './holdings-model.js';
 import {HOLDING_STYLES,reviewHolding} from './holding-review.js';
 import {buildHoldingGuidance} from './holding-guidance.js';
@@ -55,7 +54,6 @@ function registerResearch(){
    buildReport:buildDeepReport,getAIStatus:()=>researchGatewayFetch('/research'),sendAI:body=>researchGatewayFetch('/research',{method:'POST',body}),download
  });
  $('openDeepResearch').onclick=()=>{setPage('research');researchWorkspace.run();};
- mountIpoWorkspace($('ipoWorkspace'));
 }
 const instruments=[
  {symbol:'AAPL',name:'Apple Inc.',market:'US',exchange:'NASDAQ',currency:'USD',type:'Stock'},
@@ -94,7 +92,7 @@ function notify(msg){const t=$('toast');t.textContent=msg;t.classList.add('show'
 function fmt(v,dec=2){return Number.isFinite(v)?Number(v).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec}):'—'};
 const money=(v,currency=symbol.currency)=>`${currency==='USD'?'$':'RM'}${fmt(v,v>1?2:4)}`;
 const nfmt=v=>Number.isFinite(v)?fmt(v,2):'—';
-function setPage(page){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('crumb').textContent=({'analysis':'STOCK ANALYSIS','research':'DEEP RESEARCH & AI','ipo':'IPO RESEARCH','screener':'STOCK SCREENER','watchlist':'WATCHLIST','journal':'TRADES & HOLDINGS','settings':'SETTINGS','strategy':'STRATEGY & LEARNING'})[page]||'STOCK ANALYSIS';$('sidebar').classList.remove('open');if(page==='settings')fillSettings();if(page==='strategy'){fillStrategyForm();renderResearchAnswer();}if(page==='watchlist')renderWatch();if(page==='journal'){renderJournal();holdingsWorkspace?.refresh();}if(page==='screener')renderScreener();if(page==='research')researchWorkspace?.refresh();if(page==='analysis')requestAnimationFrame(drawChart);window.scrollTo({top:0,behavior:'instant'});}
+function setPage(page){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('crumb').textContent=({'analysis':'STOCK ANALYSIS','research':'DEEP RESEARCH & AI','screener':'STOCK SCREENER','watchlist':'WATCHLIST','journal':'TRADES & HOLDINGS','settings':'SETTINGS','strategy':'STRATEGY & LEARNING'})[page]||'STOCK ANALYSIS';$('sidebar').classList.remove('open');if(page==='settings')fillSettings();if(page==='strategy'){fillStrategyForm();renderResearchAnswer();}if(page==='watchlist')renderWatch();if(page==='journal'){renderJournal();holdingsWorkspace?.refresh();}if(page==='screener')renderScreener();if(page==='research')researchWorkspace?.refresh();if(page==='analysis')requestAnimationFrame(drawChart);window.scrollTo({top:0,behavior:'instant'});}
 function getInstrument(q){q=q.toUpperCase().replace('.KL','');return instruments.find(s=>s.symbol.toUpperCase()===q)||instruments.find(s=>s.name.toUpperCase()===q)||null}
 function selectedInstrument(q){const found=getInstrument(q);if(found)return found;const raw=String(q).trim().toUpperCase().replace(/[^A-Z0-9.^:-]/g,'').slice(0,24);if(!raw)throw new Error('Type a ticker or company name first.');return {symbol:raw,name:`Custom ticker ${raw}`,market:/^\d{4}/.test(raw)?'MY':'US',exchange:'USER SELECTED',currency:/^\d{4}/.test(raw)?'MYR':'USD',type:'Stock'};}
 let searchTimer=null;

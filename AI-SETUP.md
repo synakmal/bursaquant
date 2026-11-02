@@ -1,8 +1,8 @@
 # Optional AI research coach
 
-The deep technical report and IPO workspace work without an AI account. AI is disabled by default. No AI key, paid account or billing change was created for this release.
+Deep stock research and holding reviews work without an AI account. AI is disabled by default. No AI key, paid account or billing change was created for this release.
 
-The coach explains a supplied daily / 4H / 1H technical report. It has no independent live quotes, news, filing retrieval, web browsing or broker tools. IPO research is available in its own manual workspace; this first AI endpoint accepts stock technical reports only.
+The coach explains a supplied daily / 4H / 1H technical report. It has no independent live quotes, news, filing retrieval, web browsing or broker tools. The AI endpoint accepts stock technical reports only.
 
 ## Enable later
 
@@ -18,7 +18,7 @@ The coach explains a supplied daily / 4H / 1H technical report. It has no indepe
 
 4. Keep the existing `BQ_ACCESS_TOKEN` and `BQ_ALLOWED_ORIGIN`. Redeploy after changing environment variables.
 5. Open a stock, build a fresh deep-analysis report and check AI status. Ask one question, verify the evidence references against the report, and inspect provider usage before continuing.
-6. Set `BQ_AI_ENABLED=false` and redeploy to disable new AI calls. Disabling AI leaves stock and IPO calculations available.
+6. Set `BQ_AI_ENABLED=false` and redeploy to disable new AI calls. Disabling AI leaves stock research and holding reviews available.
 
 ## Data and request boundaries
 

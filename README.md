@@ -1,6 +1,10 @@
-# BursaQuant — Stock Research Terminal (v0.7.2 trial)
+# BursaQuant — Stock Research Terminal (v0.7.3 trial)
 
 BursaQuant is a lightweight stock-research dashboard for US and Bursa Malaysia markets. It combines real OHLCV data with transparent technical rules, conditional entry/stop/TP scenarios and configurable position-risk calculations.
+
+## New in v0.7.3: simpler workspace and scrollable navigation
+
+IPO Research has been removed from the page, navigation, loaded styles and generated browser bundle. Existing browser records are left untouched. The sidebar now scrolls independently on short screens and supports keyboard focus, so every navigation item and the data status remain reachable. All 240 retained automated checks pass, including navigation and preservation of old browser records; tests for the removed IPO feature were removed with it.
 
 ## New in v0.7.2: explained holding guidance
 
@@ -24,15 +28,13 @@ Read [HOLDINGS-START-HERE.md](HOLDINGS-START-HERE.md) for the walkthrough and pr
 
 v0.7 validation: 229 automated tests pass, including partial-sale accounting, corrections/undo, old-journal preservation, backup privacy, timeframe reference selection, invalid data and expired reviews. These checks validate implementation; they do not establish profitable trading performance.
 
-## New in v0.6: deep stock research and IPO comparisons
+## Deep stock research
 
 Read [DEEP-RESEARCH-START-HERE.md](DEEP-RESEARCH-START-HERE.md) for the walkthrough. **Analyse deeper** fetches daily, 4H and 1H histories sequentially, shows trend agreements and conflicts, includes the daily accumulation checklist and displays conditional scenarios with your existing risk settings. Missing, invalid, stale or incomplete histories remain explicit; a report can be useful with partial coverage. Scores and pressure estimates are not probabilities or verified investor flows.
 
-**IPO Research** is a manual, source-backed workspace for offer terms, audited annual financials, comparable listed peers, valuation multiples, offer structure, risks and a thesis. Share counts and financial totals use millions. It starts empty and does not fetch an IPO calendar or extract PDFs. Peer medians require confirmed sources, audited annual figures, the same financial year-end and currency, and your comparability review. Browser-only dossiers support JSON backup/import.
-
 The optional **AI Research Coach** explains a fresh stock technical report. Calls are disabled until explicitly configured; no AI account, model or paid service is selected for this release. See [AI-SETUP.md](AI-SETUP.md). The server removes position sizes and account settings, limits requests and uses the existing private access code. It has no live web, news or prospectus access. It does not provide a monthly budget; configure a provider API-key/team budget before enabling it.
 
-Validation: 161 automated tests pass, covering existing behaviour, report provenance/coverage, request races, private AI boundaries and IPO valuation/import edge cases. This verifies implementation, not profitability. iSaham remains optional and deferred; warrants remain outside scope.
+Validation: 161 automated tests pass, covering existing behaviour, report provenance/coverage, request races, private AI boundaries. This verifies implementation, not profitability. iSaham remains optional and deferred; warrants remain outside scope.
 
 ## New in v0.5: a real daily screener
 
